@@ -47,10 +47,10 @@ def load_data():
     # ==========================================
     ID_GEN_EXPENSES = "1hZoymf0CN1wOssc3ddQiZXxbJTdzJZBnamp_aCobl1Q"  # سجل المصروفات
     ID_CAR_EXPENSES = "1vDKKOywOEGfmLcHr4xk7KMTChHJ0_qquNopXpD81XVE"  # سجل مصروفات السيارات
-    ID_CARS = "1LGvYd5qBVRobzyLuBqwDInjdINmQTxih"                     # السيارات
-    ID_CLIENTS = "1E-WCpXev61HeqcH4o2WAbkKiz14zlUx9"                   # العملاء
+    ID_CARS = "1fLr5mwDoRQ1P5g-t4uZ8mSY04xHiCSSisSWDbatx9dg"                     # السيارات
+    ID_CLIENTS = "1izZeNVITKEKVCT4KUnb71uFO8pzCdpUs8t8FetAxbEg"                   # العملاء
     ID_COLLECTIONS = "1jtp-ihtAOt9NNHETZ5muiL5OA9yW3WrpBIIDAf5UAyg"     # سجل التحصيلات المالية
-    ID_ORDERS = "1mfHPYwlqyVUYXToNGXqhFIYErXv_zBcz"                    # تسجيل الطلبات
+    ID_ORDERS = "10OK9uw2o3Yqy2akXAjmjbP_YvgGwivp14-MoeHj0cX4"                    # تسجيل الطلبات
 
     # Load Dataframes (Exact tab names from your files)
     df_coll = get_sheet_data(ID_COLLECTIONS, "'صفحة الإدخالات لقاعدة البيانات'!A:Z", "Collections")
