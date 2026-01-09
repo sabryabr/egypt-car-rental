@@ -34,31 +34,39 @@ def load_data():
 
     def get_sheet_data(sheet_id, range_name, file_label):
         try:
+            # We use A:ZZ to ensure we catch columns even if they are far to the right (like AC, AD...)
             result = sheet.values().get(spreadsheetId=sheet_id, range=range_name).execute()
             vals = result.get('values', [])
             if not vals: return pd.DataFrame()
-            return pd.DataFrame(vals[1:], columns=vals[0])
+            
+            # Create DataFrame
+            df = pd.DataFrame(vals[1:], columns=vals[0])
+            
+            # CLEAN COLUMN NAMES (Remove hidden spaces which cause KeyErrors)
+            df.columns = df.columns.str.strip()
+            
+            return df
         except Exception as e:
             st.error(f"⚠️ Error loading {file_label}: {e}")
             return pd.DataFrame()
 
     # ==========================================
-    # 🟢 YOUR IDS (Inserted Automatically)
+    # 🟢 YOUR IDS
     # ==========================================
-    ID_GEN_EXPENSES = "1hZoymf0CN1wOssc3ddQiZXxbJTdzJZBnamp_aCobl1Q"  # سجل المصروفات
-    ID_CAR_EXPENSES = "1vDKKOywOEGfmLcHr4xk7KMTChHJ0_qquNopXpD81XVE"  # سجل مصروفات السيارات
-    ID_CARS = "1fLr5mwDoRQ1P5g-t4uZ8mSY04xHiCSSisSWDbatx9dg"                     # السيارات
-    ID_CLIENTS = "1izZeNVITKEKVCT4KUnb71uFO8pzCdpUs8t8FetAxbEg"                   # العملاء
-    ID_COLLECTIONS = "1jtp-ihtAOt9NNHETZ5muiL5OA9yW3WrpBIIDAf5UAyg"     # سجل التحصيلات المالية
-    ID_ORDERS = "10OK9uw2o3Yqy2akXAjmjbP_YvgGwivp14-MoeHj0cX4"                    # تسجيل الطلبات
+    ID_GEN_EXPENSES = "1hZoymf0CN1wOssc3ddQiZXxbJTdzJZBnamp_aCobl1Q"  
+    ID_CAR_EXPENSES = "1vDKKOywOEGfmLcHr4xk7KMTChHJ0_qquNopXpD81XVE"  
+    ID_CARS = "1fLr5mwDoRQ1P5g-t4uZ8mSY04xHiCSSisSWDbatx9dg"                      
+    ID_CLIENTS = "1izZeNVITKEKVCT4KUnb71uFO8pzCdpUs8t8FetAxbEg"                    
+    ID_COLLECTIONS = "1jtp-ihtAOt9NNHETZ5muiL5OA9yW3WrpBIIDAf5UAyg"     
+    ID_ORDERS = "16mLWxdxpV6DDaGfeLf-t1XDx25H4rVEbtx_hE88nF7A"                     
 
-    # Load Dataframes (Exact tab names from your files)
-    df_coll = get_sheet_data(ID_COLLECTIONS, "'صفحة الإدخالات لقاعدة البيانات'!A:Z", "Collections")
-    df_gen_exp = get_sheet_data(ID_GEN_EXPENSES, "'صفحة الإدخالات لقاعدة البيانات'!A:Z", "General Expenses")
-    df_car_exp = get_sheet_data(ID_CAR_EXPENSES, "'صفحة الإدخالات لقاعدة البيانات'!A:Z", "Car Expenses")
-    df_orders = get_sheet_data(ID_ORDERS, "'صفحة الإدخالات للإيجارات'!A:Z", "Orders")
-    df_cars = get_sheet_data(ID_CARS, "'قاعدة البيانات'!A:Z", "Car Database")
-    df_clients = get_sheet_data(ID_CLIENTS, "'صفحة الإدخالات لقاعدة البيانات'!A:Z", "Clients")
+    # Load Dataframes (Updated range to A:ZZ to fix the missing column error)
+    df_coll = get_sheet_data(ID_COLLECTIONS, "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", "Collections")
+    df_gen_exp = get_sheet_data(ID_GEN_EXPENSES, "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", "General Expenses")
+    df_car_exp = get_sheet_data(ID_CAR_EXPENSES, "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", "Car Expenses")
+    df_orders = get_sheet_data(ID_ORDERS, "'صفحة الإدخالات للإيجارات'!A:ZZ", "Orders")
+    df_cars = get_sheet_data(ID_CARS, "'قاعدة البيانات'!A:ZZ", "Car Database")
+    df_clients = get_sheet_data(ID_CLIENTS, "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", "Clients")
 
     return df_coll, df_gen_exp, df_car_exp, df_orders, df_cars, df_clients
 
@@ -78,10 +86,13 @@ if data:
     # 2. Map Car IDs to Real Names
     car_map = {}
     if not df_cars.empty:
-        # Combining Model and Color
-        df_cars['Full_Name'] = df_cars['الطراز'] + " - " + df_cars['اللون']
-        df_cars['No.'] = df_cars['No.'].astype(str)
-        car_map = df_cars.set_index('No.')['Full_Name'].to_dict()
+        # Check if expected columns exist in Cars DB to prevent index error
+        if 'الطراز' in df_cars.columns and 'اللون' in df_cars.columns and 'No.' in df_cars.columns:
+            df_cars['Full_Name'] = df_cars['الطراز'] + " - " + df_cars['اللون']
+            df_cars['No.'] = df_cars['No.'].astype(str).str.strip()
+            car_map = df_cars.set_index('No.')['Full_Name'].to_dict()
+        else:
+            st.warning("⚠️ Heads up: The 'Cars' sheet headers look wrong. Make sure Row 1 contains: No., الطراز, اللون")
 
     # --- CALCULATIONS ---
     total_rev = df_coll['قيمة التحصيل'].sum() if not df_coll.empty else 0
@@ -112,16 +123,29 @@ if data:
             st.subheader("تحليل ربحية السيارات (Profitability per Car)")
             
             if not df_orders.empty:
-                df_orders['Total_Cost'] = pd.to_numeric(df_orders['التكلفة الإجمالية'], errors='coerce').fillna(0)
-                df_orders['Car_ID_Clean'] = df_orders['كود السيارة'].astype(str).str.strip()
-                car_rev = df_orders.groupby('Car_ID_Clean')['Total_Cost'].sum().reset_index(name='Revenue')
+                # Check for the column name existence before accessing
+                cost_col = 'التكلفة الإجمالية'
+                car_code_col = 'كود السيارة'
+                
+                if cost_col in df_orders.columns and car_code_col in df_orders.columns:
+                    df_orders['Total_Cost'] = pd.to_numeric(df_orders[cost_col], errors='coerce').fillna(0)
+                    df_orders['Car_ID_Clean'] = df_orders[car_code_col].astype(str).str.strip()
+                    car_rev = df_orders.groupby('Car_ID_Clean')['Total_Cost'].sum().reset_index(name='Revenue')
+                else:
+                    st.error(f"Missing columns in Orders sheet. Found: {list(df_orders.columns)}")
+                    car_rev = pd.DataFrame(columns=['Car_ID_Clean', 'Revenue'])
             else:
                 car_rev = pd.DataFrame(columns=['Car_ID_Clean', 'Revenue'])
 
             if not df_car_exp.empty:
-                car_id_col = [c for c in df_car_exp.columns if 'كود السيارة' in c][0]
-                df_car_exp['Car_ID_Clean'] = df_car_exp[car_id_col].astype(str).str.strip()
-                car_cost = df_car_exp.groupby('Car_ID_Clean')['قيمة المصروف'].sum().reset_index(name='Expense')
+                # Fuzzy match for Car ID column in Expenses
+                possible_cols = [c for c in df_car_exp.columns if 'كود السيارة' in c]
+                if possible_cols:
+                    car_id_col = possible_cols[0]
+                    df_car_exp['Car_ID_Clean'] = df_car_exp[car_id_col].astype(str).str.strip()
+                    car_cost = df_car_exp.groupby('Car_ID_Clean')['قيمة المصروف'].sum().reset_index(name='Expense')
+                else:
+                    car_cost = pd.DataFrame(columns=['Car_ID_Clean', 'Expense'])
             else:
                 car_cost = pd.DataFrame(columns=['Car_ID_Clean', 'Expense'])
 
@@ -133,24 +157,26 @@ if data:
             st.dataframe(
                 fleet[['Car_Name', 'Revenue', 'Expense', 'Net_Profit']],
                 use_container_width=True,
-                column_config={"Net_Profit": st.column_config.ProgressColumn("صافي الربح", format="%d EGP", min_value=0, max_value=int(fleet['Net_Profit'].max()))}
+                column_config={"Net_Profit": st.column_config.ProgressColumn("صافي الربح", format="%d EGP", min_value=0, max_value=int(fleet['Net_Profit'].max()) if not fleet.empty else 0)}
             )
 
         with c2:
             st.subheader("أهم العملاء (Top Clients)")
             if not df_orders.empty and not df_clients.empty and 'كود العميل' in df_orders.columns:
-                # Merge Orders with Client Names
                 top_clients = df_orders['كود العميل'].value_counts().head(5).reset_index()
                 top_clients.columns = ['Client_ID', 'Rentals']
                 
-                # Try to map names if possible
-                df_clients['No.'] = df_clients['No.'].astype(str)
-                client_map = df_clients.set_index('No.')['الاسم الأول'].to_dict()
-                top_clients['Name'] = top_clients['Client_ID'].astype(str).map(client_map)
+                # Check client mapping columns
+                if 'No.' in df_clients.columns and 'الاسم الأول' in df_clients.columns:
+                    df_clients['No.'] = df_clients['No.'].astype(str).str.strip()
+                    client_map = df_clients.set_index('No.')['الاسم الأول'].to_dict()
+                    top_clients['Name'] = top_clients['Client_ID'].astype(str).map(client_map).fillna(top_clients['Client_ID'])
+                else:
+                    top_clients['Name'] = top_clients['Client_ID']
                 
                 st.table(top_clients[['Name', 'Rentals']])
             else:
-                st.info("لا توجد بيانات كافية للعملاء")
+                st.info("No sufficient client data.")
 
     with tab2:
         c1, c2 = st.columns(2)
@@ -162,8 +188,8 @@ if data:
         with c2:
             st.subheader("توزيع المصروفات")
             all_exp = pd.concat([
-                df_gen_exp[['بيان المصروف', 'قيمة المصروف']].rename(columns={'بيان المصروف':'Item', 'قيمة المصروف':'Value'}),
-                df_car_exp[['نوع المصروف', 'قيمة المصروف']].rename(columns={'نوع المصروف':'Item', 'قيمة المصروف':'Value'})
+                df_gen_exp[['بيان المصروف', 'قيمة المصروف']].rename(columns={'بيان المصروف':'Item', 'قيمة المصروف':'Value'}) if not df_gen_exp.empty else pd.DataFrame(),
+                df_car_exp[['نوع المصروف', 'قيمة المصروف']].rename(columns={'نوع المصروف':'Item', 'قيمة المصروف':'Value'}) if not df_car_exp.empty else pd.DataFrame()
             ])
             if not all_exp.empty:
                 st.plotly_chart(px.treemap(all_exp, path=['Item'], values='Value'), use_container_width=True)
