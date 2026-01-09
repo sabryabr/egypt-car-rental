@@ -1,0 +1,8 @@
+streamlit
+pandas
+plotly
+google-api-python-client
+google-auth
+crewai
+langchain_openai
+openpyxl
