@@ -11,12 +11,32 @@ import re
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Egypt Rental Command Center", layout="wide", page_icon="🚘")
 
+# --- IMPROVED CSS (FIXES INVISIBLE TEXT) ---
 st.markdown("""
 <style>
     .main { direction: rtl; text-align: right; }
     h1, h2, h3, p, div { font-family: 'Cairo', sans-serif; }
-    .stMetric { background-color: #f8f9fa; border-radius: 10px; padding: 10px; border: 1px solid #e0e0e0; }
-    .stDataFrame { direction: ltr; } /* Keep tables LTR for better number readability */
+    
+    /* Force the Metrics to have Black Text on Light Background */
+    .stMetric { 
+        background-color: #f8f9fa !important; 
+        border-radius: 10px; 
+        padding: 15px; 
+        border: 1px solid #e0e0e0;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+    }
+    
+    /* Target the specific text elements inside the metric card */
+    [data-testid="stMetricLabel"] {
+        color: #444444 !important; /* Dark Grey for Label */
+        font-weight: bold;
+    }
+    [data-testid="stMetricValue"] {
+        color: #000000 !important; /* Pure Black for Numbers */
+        font-weight: bold;
+    }
+    
+    .stDataFrame { direction: ltr; } 
 </style>
 """, unsafe_allow_html=True)
 
@@ -27,19 +47,10 @@ def clean_money_value(x):
     """
     if pd.isna(x) or x == '' or x is None:
         return 0.0
-    
-    # If it's already a number, return it
     if isinstance(x, (int, float)):
         return float(x)
-    
-    # Convert to string
     s = str(x)
-    
-    # Remove commas (thousands separator)
     s = s.replace(',', '')
-    
-    # Remove currency symbols or text (Keep only digits and dots)
-    # This regex matches any integer or decimal number
     match = re.search(r"[-+]?\d*\.\d+|\d+", s)
     if match:
         try:
@@ -70,7 +81,7 @@ def load_data():
             vals = result.get('values', [])
             if not vals: return pd.DataFrame()
 
-            # Smart Header Detection (Scans first 10 rows for Header Keywords)
+            # Smart Header Detection
             header_index = 0
             header_found = False
             keywords = ['No.', 'كود', 'الاسم', 'Name', 'Code', 'المحافظة', 'Date', 'Type', 'نوع']
@@ -84,7 +95,6 @@ def load_data():
             
             if not header_found: header_index = 0
 
-            # Separate Headers and Data
             headers = vals[header_index]
             data = vals[header_index+1:]
 
@@ -138,22 +148,17 @@ data = load_data()
 if data:
     df_coll, df_gen_exp, df_car_exp, df_orders, df_cars, df_clients = data
 
-    # --- DATA CLEANING (THE FIX IS HERE) ---
-    # Apply clean_money_value to all columns that might contain money
+    # --- DATA CLEANING ---
     for df in [df_coll, df_gen_exp, df_car_exp]:
         if not df.empty:
-            # Look for columns with 'قيمة' (Value) in their name
             cols = [c for c in df.columns if 'قيمة' in c]
-            for c in cols: 
-                df[c] = df[c].apply(clean_money_value)
+            for c in cols: df[c] = df[c].apply(clean_money_value)
     
-    # Special cleaning for Orders 'Total Cost'
     if not df_orders.empty:
         cost_col = next((c for c in df_orders.columns if 'إجمال' in c or 'Total' in c), None)
         if cost_col:
             df_orders['Total_Cost_Clean'] = df_orders[cost_col].apply(clean_money_value)
 
-    # Map Car IDs
     car_map = {}
     if not df_cars.empty:
         model_col = next((c for c in df_cars.columns if 'طراز' in c or 'Model' in c), None)
@@ -217,7 +222,8 @@ if data:
             fleet['Car_Name'] = fleet['Car_ID_Clean'].map(car_map).fillna(fleet['Car_ID_Clean'])
             fleet = fleet.sort_values('Net_Profit', ascending=False)
             
-            st.dataframe(fleet[['Car_Name', 'Revenue', 'Expense', 'Net_Profit']], use_container_width=True)
+            # --- FIXED: USING TABLE INSTEAD OF DATAFRAME FOR BETTER VISIBILITY ---
+            st.table(fleet[['Car_Name', 'Revenue', 'Expense', 'Net_Profit']].head(20))
 
         with c2:
             st.subheader("أهم العملاء")
@@ -226,7 +232,6 @@ if data:
                 if client_col:
                     top_clients = df_orders[client_col].value_counts().head(5).reset_index()
                     top_clients.columns = ['Client_ID', 'Rentals']
-                    # Client Map
                     c_id = next((c for c in df_clients.columns if 'No' in c), None)
                     c_name = next((c for c in df_clients.columns if 'اسم' in c or 'Name' in c), None)
                     if not df_clients.empty and c_id and c_name:
@@ -274,13 +279,8 @@ if data:
 
     with tab4:
         st.subheader("🔧 فحص البيانات (Diagnostics)")
-        st.info("Use this tab to check if data is loaded correctly. If tables are empty, the Sheet ID is wrong or Sheet is empty.")
-        
-        st.write("### 1. Collections (التحصيلات)")
+        st.info("Use this tab to check if data is loaded correctly.")
+        st.write("### 1. Collections")
         st.dataframe(df_coll.head(3))
-        
-        st.write("### 2. Orders (الطلبات)")
+        st.write("### 2. Orders")
         st.dataframe(df_orders.head(3))
-        
-        st.write("### 3. Expenses (المصروفات)")
-        st.dataframe(df_gen_exp.head(3))
