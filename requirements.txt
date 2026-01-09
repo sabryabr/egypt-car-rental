@@ -6,3 +6,4 @@ google-auth
 crewai
 langchain_openai
 openpyxl
+langchain-google-genai
