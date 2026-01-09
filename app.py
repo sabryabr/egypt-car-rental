@@ -4,13 +4,12 @@ import plotly.express as px
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from crewai import Agent, Task, Crew
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 import os
 
 # --- 1. SETUP & CONFIG ---
 st.set_page_config(page_title="Egypt Rental CEO Dashboard", layout="wide", page_icon="🚗")
 
-# Custom CSS for Arabic
 st.markdown("""
 <style>
     .main { direction: rtl; text-align: right; }
@@ -20,9 +19,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. CONNECT TO GOOGLE SHEETS ---
-@st.cache_data(ttl=600) # Auto-refresh every 10 mins
+@st.cache_data(ttl=600)
 def load_data():
-    # Load secrets from Streamlit Cloud
+    # Load secrets
+    if "gcp_service_account" not in st.secrets:
+        st.error("Missing Google Cloud Secrets!")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
     creds_dict = st.secrets["gcp_service_account"]
     creds = service_account.Credentials.from_service_account_info(
         creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
@@ -31,19 +34,20 @@ def load_data():
     sheet = service.spreadsheets()
 
     def get_sheet_data(sheet_id, range_name):
-        result = sheet.values().get(spreadsheetId=sheet_id, range=range_name).execute()
-        vals = result.get('values', [])
-        if not vals: return pd.DataFrame()
-        return pd.DataFrame(vals[1:], columns=vals[0])
+        try:
+            result = sheet.values().get(spreadsheetId=sheet_id, range=range_name).execute()
+            vals = result.get('values', [])
+            if not vals: return pd.DataFrame()
+            return pd.DataFrame(vals[1:], columns=vals[0])
+        except Exception as e:
+            st.error(f"Error reading sheet: {e}")
+            return pd.DataFrame()
 
-    # --- INPUT YOUR SHEET IDs HERE ---
-    # Example ID: 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms (It is the long code in your URL)
+    # REPLACE THESE WITH YOUR ACTUAL IDS
     ID_FINANCE = "YOUR_COLLECTIONS_AND_EXPENSES_SHEET_ID" 
     ID_ORDERS = "YOUR_ORDERS_SHEET_ID"
     
-    # Fetch Data (Adjust 'Sheet1' to your actual tab names like 'قاعدة البيانات')
-    # Note: I am assuming you might have combined files or separate ones. 
-    # Use the ID of the specific file for each dataframe.
+    # Adjust tab names (e.g. 'Sheet1') to match your actual Arabic tab names exactly
     df_coll = get_sheet_data(ID_FINANCE, "'سجل التحصيلات المالية'!A:Z") 
     df_exp = get_sheet_data(ID_FINANCE, "'سجل المصروفات'!A:Z")
     df_orders = get_sheet_data(ID_ORDERS, "'صفحة الإدخالات للإيجارات'!A:Z")
@@ -52,70 +56,80 @@ def load_data():
 
 # --- 3. MAIN APP ---
 try:
-    if 'OPENAI_API_KEY' in st.secrets:
-        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-    
     df_coll, df_exp, df_orders = load_data()
 
-    # --- DATA CLEANING (Automatic) ---
-    # Convert numbers from text to float
+    # --- DATA CLEANING ---
     for df in [df_coll, df_exp]:
-        # Look for columns like "قيمة" or "Value"
         cols = [c for c in df.columns if 'قيمة' in c]
         for c in cols: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
     # --- DASHBOARD ---
-    st.title("🇪🇬 لوحة القيادة الآلية (Real-Time)")
+    st.title("🇪🇬 لوحة القيادة (Powered by Gemini)")
     
-    # Calculate KPIs
     total_rev = df_coll['قيمة التحصيل'].sum() if 'قيمة التحصيل' in df_coll.columns else 0
     total_exp = df_exp['قيمة المصروف'].sum() if 'قيمة المصروف' in df_exp.columns else 0
     net_profit = total_rev - total_exp
 
-    # Top Metrics
     k1, k2, k3 = st.columns(3)
-    k1.metric("صافي الربح (Net Profit)", f"{net_profit:,.0f} EGP", delta="Live")
-    k2.metric("الإيرادات (Revenue)", f"{total_rev:,.0f} EGP")
-    k3.metric("المصروفات (Expenses)", f"{total_exp:,.0f} EGP", delta_color="inverse")
+    k1.metric("صافي الربح", f"{net_profit:,.0f} EGP", delta="Live")
+    k2.metric("الإيرادات", f"{total_rev:,.0f} EGP")
+    k3.metric("المصروفات", f"{total_exp:,.0f} EGP", delta_color="inverse")
 
     st.divider()
 
-    # --- 4. CREW AI INTELLIGENCE ---
-    st.subheader("🧠 التحليل الذكي (AI Analysis)")
+    # --- 4. GEMINI AI INTELLIGENCE ---
+    st.subheader("🧠 التحليل الذكي (Gemini AI)")
     
-    if st.button("Run Daily Analysis"):
-        if 'OPENAI_API_KEY' not in st.secrets:
-            st.error("Please add OPENAI_API_KEY to Streamlit Secrets.")
+    if st.button("Run Daily Analysis (مجاني)"):
+        if 'GOOGLE_API_KEY' not in st.secrets:
+            st.error("Please add GOOGLE_API_KEY to Streamlit Secrets.")
         else:
-            with st.spinner("The AI Crew is reading your live sheets..."):
-                # Summarize data for the AI (to save tokens)
+            with st.spinner("Gemini is analyzing your sheets..."):
+                # 1. Setup Gemini
+                os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+                
+                # We use the free 'gemini-1.5-flash' model which is fast and free
+                gemini_llm = ChatGoogleGenerativeAI(
+                    model="gemini-1.5-flash",
+                    verbose=True,
+                    temperature=0.3,
+                    google_api_key=st.secrets["GOOGLE_API_KEY"]
+                )
+
+                # 2. Summarize Data
                 fin_summary = f"Revenue: {total_rev}, Expenses: {total_exp}, Net: {net_profit}"
                 
-                # Agents
-                cfo = Agent(role='CFO', goal='Analyze financial health', backstory='Strict accountant', verbose=True)
-                
-                # Task
-                task = Task(
-                    description=f"Analyze this car rental data: {fin_summary}. Give 3 bullet points on financial health and 1 warning.",
-                    agent=cfo,
-                    expected_output="A list of bullet points."
+                # 3. Create Agent with Gemini
+                cfo = Agent(
+                    role='CFO', 
+                    goal='Analyze financial health', 
+                    backstory='Strict accountant', 
+                    llm=gemini_llm,  # <--- WE TELL IT TO USE GEMINI HERE
+                    verbose=True,
+                    allow_delegation=False
                 )
                 
+                # 4. Create Task
+                task = Task(
+                    description=f"Analyze this data: {fin_summary}. Give 3 bullet points in Arabic about the financial status.",
+                    agent=cfo,
+                    expected_output="Bullet points in Arabic"
+                )
+                
+                # 5. Run
                 crew = Crew(agents=[cfo], tasks=[task])
                 result = crew.kickoff()
                 
-                st.success("Analysis Ready:")
-                st.info(result)
+                st.success("تم التحليل:")
+                st.markdown(result)
 
     # --- VISUALS ---
     st.subheader("📊 الرسوم البيانية")
-    tab1, tab2 = st.tabs(["Profitability", "Fleet"])
-    
+    tab1, tab2 = st.tabs(["الربحية", "الأسطول"])
     with tab1:
-        # Simple Bar Chart
         chart_data = pd.DataFrame({'Type':['Revenue','Expense'], 'Value':[total_rev, total_exp]})
         st.plotly_chart(px.bar(chart_data, x='Type', y='Value', color='Type'), use_container_width=True)
 
 except Exception as e:
-    st.warning("Please connect your Google Sheets in the code!")
-    st.error(f"Error details: {e}")
+    st.warning("Please check your Google Sheet connections.")
+    st.error(f"Error: {e}")
