@@ -8,53 +8,51 @@ from crewai import Agent, Task, Crew
 from langchain_google_genai import ChatGoogleGenerativeAI
 import os
 import re
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Egypt Rental CEO Dashboard", layout="wide", page_icon="🚘")
+st.set_page_config(page_title="Egypt Rental Command Center", layout="wide", page_icon="🚘")
 
 st.markdown("""
 <style>
     .main { direction: rtl; text-align: right; }
     h1, h2, h3, p, div { font-family: 'Cairo', sans-serif; }
+    
+    /* Metrics Styling */
     .stMetric { 
         background-color: #ffffff !important; 
         border-radius: 12px; 
         padding: 15px; 
         border: 1px solid #dee2e6;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     [data-testid="stMetricLabel"] { color: #6c757d !important; font-size: 0.9rem; }
-    [data-testid="stMetricValue"] { color: #212529 !important; font-weight: 700; font-size: 1.8rem; }
+    [data-testid="stMetricValue"] { color: #212529 !important; font-weight: 700; font-size: 1.6rem; }
+    
+    /* Tags Styling */
+    .status-valid { color: #198754; font-weight: bold; background-color: #d1e7dd; padding: 2px 8px; border-radius: 10px; }
+    .status-expired { color: #dc3545; font-weight: bold; background-color: #f8d7da; padding: 2px 8px; border-radius: 10px; }
+    .pay-paid { color: #198754; font-weight: bold; }
+    .pay-pending { color: #fd7e14; font-weight: bold; }
+    
     .stDataFrame { direction: ltr; }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #f8f9fa;
-        border-radius: 5px;
-        padding: 10px 20px;
-        font-weight: bold;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #e7f1ff;
-        color: #0d6efd;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. HELPERS ---
+def excel_col_to_index(col_str):
+    """ Converts Excel Column Letter (e.g., 'BA', 'CJ') to zero-based index """
+    num = 0
+    for c in col_str:
+        if c in str.ascii_letters:
+            num = num * 26 + (ord(c.upper()) - ord('A')) + 1
+    return num - 1
+
 def clean_money(x):
-    if pd.isna(x) or x == '': return 0.0
+    if pd.isna(x) or str(x).strip() == '': return 0.0
     s = str(x).replace(',', '')
     match = re.search(r"[-+]?\d*\.\d+|\d+", s)
     return float(match.group()) if match else 0.0
-
-def parse_date(df, col_name):
-    """ Tries to parse dates flexibly """
-    if col_name in df.columns:
-        return pd.to_datetime(df[col_name], errors='coerce')
-    return pd.Series([pd.NaT]*len(df))
 
 # --- 3. DATA LOADER ---
 @st.cache_data(ttl=600)
@@ -68,39 +66,28 @@ def load_data():
     )
     service = build('sheets', 'v4', credentials=creds)
 
-    def get_sheet(sheet_id, range_name):
+    def get_sheet(sheet_id, range_name, header_row=0):
         try:
+            # We fetch A:ZZ to ensure we get all far columns like CJ
             res = service.spreadsheets().values().get(spreadsheetId=sheet_id, range=range_name).execute()
             vals = res.get('values', [])
             if not vals: return pd.DataFrame()
             
-            # Smart Header Search
-            header_idx = 0
-            keywords = ['No.', 'كود', 'Name', 'Code', 'Date', 'Type']
-            for i, row in enumerate(vals[:10]):
-                if any(k in str(row) for k in keywords):
-                    header_idx = i; break
-            
-            headers = [str(h).strip() for h in vals[header_idx]]
-            # Uniquify headers
-            seen = {}
-            unique_headers = []
-            for h in headers:
-                if h in seen:
-                    seen[h] += 1
-                    unique_headers.append(f"{h}_{seen[h]}")
-                else:
-                    seen[h] = 0
-                    unique_headers.append(h)
-            
-            data = vals[header_idx+1:]
-            max_len = len(unique_headers)
-            clean_data = [row[:max_len] + [None]*(max_len-len(row)) for row in data]
-            
-            return pd.DataFrame(clean_data, columns=unique_headers)
-        except Exception: return pd.DataFrame()
+            # Use specific header row
+            if len(vals) > header_row:
+                headers = vals[header_row]
+                data = vals[header_row+1:]
+                
+                # Normalize
+                max_len = len(headers)
+                clean_data = [row[:max_len] + [None]*(max_len-len(row)) for row in data]
+                return pd.DataFrame(clean_data, columns=headers)
+            return pd.DataFrame()
+        except Exception as e:
+            st.error(f"Error loading sheet: {e}")
+            return pd.DataFrame()
 
-    # IDs
+    # IDS
     ids = {
         'coll': "1jtp-ihtAOt9NNHETZ5muiL5OA9yW3WrpBIIDAf5UAyg",
         'gen': "1hZoymf0CN1wOssc3ddQiZXxbJTdzJZBnamp_aCobl1Q",
@@ -111,12 +98,12 @@ def load_data():
     }
 
     dfs = {}
-    dfs['coll'] = get_sheet(ids['coll'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ")
-    dfs['gen'] = get_sheet(ids['gen'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ")
-    dfs['car_exp'] = get_sheet(ids['car_exp'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ")
-    dfs['orders'] = get_sheet(ids['orders'], "'صفحة الإدخالات للإيجارات'!A:ZZ")
-    dfs['cars'] = get_sheet(ids['cars'], "'قاعدة البيانات'!A:ZZ")
-    dfs['clients'] = get_sheet(ids['clients'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ")
+    dfs['coll'] = get_sheet(ids['coll'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+    dfs['gen'] = get_sheet(ids['gen'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+    dfs['car_exp'] = get_sheet(ids['car_exp'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+    dfs['orders'] = get_sheet(ids['orders'], "'صفحة الإدخالات للإيجارات'!A:ZZ", 0) # Headers on row 0?
+    dfs['cars'] = get_sheet(ids['cars'], "'قاعدة البيانات'!A:ZZ", 0)
+    dfs['clients'] = get_sheet(ids['clients'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
 
     return dfs
 
@@ -124,266 +111,319 @@ def load_data():
 dfs = load_data()
 
 if dfs:
-    # A. Clean Financials
-    for key in ['coll', 'gen', 'car_exp']:
-        cols = [c for c in dfs[key].columns if 'قيمة' in c]
-        for c in cols: dfs[key][c] = dfs[key][c].apply(clean_money)
-
-    # B. Clean Orders
-    df_ord = dfs['orders']
-    if not df_ord.empty:
-        # Dates
-        df_ord['Start_Date'] = pd.to_datetime(df_ord['بداية التعاقد'], errors='coerce') # Adjust col name if needed, usually constructed from D/M/Y
-        # Cost
-        cost_col = next((c for c in df_ord.columns if 'إجمال' in c or 'Total' in c), None)
-        if cost_col: df_ord['Total_Cost'] = df_ord[cost_col].apply(clean_money)
-        # Dates construction from columns if needed (assuming standard Y/M/D cols exist)
-        if 'سنة' in df_ord.columns and 'شهر' in df_ord.columns:
-            df_ord['Date'] = pd.to_datetime(df_ord[['سنة', 'شهر', 'يوم']].rename(columns={'سنة':'year','شهر':'month','يوم':'day'}), errors='coerce')
-        elif 'Start_Date' in df_ord.columns:
-             df_ord['Date'] = df_ord['Start_Date']
-
-    # C. Clean Cars & Generate Owner Liabilities
-    df_cars = dfs['cars']
-    owner_payments = []
+    # --- TIME MACHINE (SIDEBAR) ---
+    st.sidebar.title("🔍 Time Filter")
+    today = datetime.today()
+    sel_year = st.sidebar.selectbox("Year", [2024, 2025, 2026, 2027], index=2) # Default 2026
+    sel_month = st.sidebar.selectbox("Month", range(1, 13), index=0) # Default Jan
     
-    if not df_cars.empty:
-        # Identify Columns
-        col_pay_amt = next((c for c in df_cars.columns if 'القيمة المالية' in c), None)
-        col_pay_freq = next((c for c in df_cars.columns if 'مدة الدفع' in c), None)
-        col_pay_start = next((c for c in df_cars.columns if 'تاريخ اول دفع' in c), None)
-        col_contract_end = next((c for c in df_cars.columns if 'نهاية التعاقد' in c), None)
-        col_status = next((c for c in df_cars.columns if 'حاله التعاقد' in c), None)
-        col_id = next((c for c in df_cars.columns if 'No' in c or 'كود' in c), None)
-        
-        # Name Construction
-        c_type = next((c for c in df_cars.columns if 'النوع' in c or 'Type' in c), '')
-        c_model = next((c for c in df_cars.columns if 'الطراز' in c or 'Model' in c), '')
-        c_year = next((c for c in df_cars.columns if 'سنة' in c or 'Year' in c), '')
-        c_color = next((c for c in df_cars.columns if 'اللون' in c or 'Color' in c), '')
-        
-        df_cars['Full_Name'] = (
-            df_cars[c_type].astype(str) + " " + 
-            df_cars[c_model].astype(str) + " (" + 
-            df_cars[c_year].astype(str) + ") - " + 
-            df_cars[c_color].astype(str)
-        )
-        if col_id:
-             df_cars['Clean_ID'] = df_cars[col_id].astype(str).str.strip()
-             car_map = df_cars.set_index('Clean_ID')['Full_Name'].to_dict()
-
-        # LIABILITY GENERATOR
-        if col_pay_amt and col_pay_start:
-            for _, car in df_cars.iterrows():
-                try:
-                    # Skip if contract not valid (Simple check)
-                    # if str(car[col_status]) == 'منتهي': continue 
-                    
-                    amount = clean_money(car[col_pay_amt])
-                    freq = int(clean_money(car[col_pay_freq])) if clean_money(car[col_pay_freq]) > 0 else 45
-                    start_date = pd.to_datetime(car[col_pay_start], errors='coerce')
-                    end_date = pd.to_datetime(car[col_contract_end], errors='coerce')
-                    
-                    if pd.isna(start_date) or amount == 0: continue
-                    if pd.isna(end_date): end_date = pd.Timestamp.today() + timedelta(days=365) # Fallback
-
-                    # Generate payments
-                    curr_date = start_date
-                    while curr_date <= end_date and curr_date <= pd.Timestamp.today() + timedelta(days=365):
-                        owner_payments.append({
-                            'Date': curr_date,
-                            'Amount': amount,
-                            'Car_ID': str(car[col_id]).strip(),
-                            'Car_Name': car['Full_Name'],
-                            'Type': 'Owner Fee'
-                        })
-                        curr_date += timedelta(days=freq)
-                except: continue
-    
-    df_liabilities = pd.DataFrame(owner_payments)
-
-    # --- 5. DASHBOARD UI ---
-    
-    # SIDEBAR FILTERS
-    st.sidebar.title("🔍 أدوات التحكم")
-    
-    # Prepare Dates for Filter
-    all_dates = []
-    if 'Date' in df_ord.columns: all_dates.extend(df_ord['Date'].dropna())
-    if not df_liabilities.empty: all_dates.extend(df_liabilities['Date'])
-    
-    if all_dates:
-        min_date = min(all_dates)
-        max_date = max(all_dates)
-        years = sorted(list(set([d.year for d in all_dates])), reverse=True)
-        
-        sel_year = st.sidebar.selectbox("السنة (Year)", years)
-        months = list(range(1, 13))
-        sel_month = st.sidebar.selectbox("الشهر (Month)", months, index=pd.Timestamp.now().month-1)
-        
-        # FILTER MASKS
-        def filter_by_date(df, date_col='Date'):
-            if df.empty or date_col not in df.columns: return df
-            return df[(df[date_col].dt.year == sel_year) & (df[date_col].dt.month == sel_month)]
-
-        # Apply Filters
-        f_ord = filter_by_date(df_ord)
-        f_liab = filter_by_date(df_liabilities)
-        
-        # Financial Filters (Assuming Y/M cols exist)
-        def filter_ym(df):
-            if df.empty: return df
-            # Try to find Year/Month cols
-            y_col = next((c for c in df.columns if 'سنة' in c), None)
-            m_col = next((c for c in df.columns if 'شهر' in c), None)
-            if y_col and m_col:
-                return df[(df[y_col].astype(str).str.contains(str(sel_year))) & 
-                          (df[m_col].astype(str).str.contains(str(sel_month)))]
-            return df
-
-        f_coll = filter_ym(dfs['coll'])
-        f_gen = filter_ym(dfs['gen'])
-        f_car_exp = filter_ym(dfs['car_exp'])
-
+    start_of_month = datetime(sel_year, sel_month, 1)
+    if sel_month == 12:
+        end_of_month = datetime(sel_year + 1, 1, 1) - timedelta(days=1)
     else:
-        st.error("No Date Data Found")
-        st.stop()
+        end_of_month = datetime(sel_year, sel_month + 1, 1) - timedelta(days=1)
 
-    # --- CALCULATIONS ---
-    # Revenue
-    rev = f_coll['قيمة التحصيل'].sum() if not f_coll.empty else 0
+    # --- A. PROCESS CARS (THE ENGINE) ---
+    df_cars_raw = dfs['cars']
+    cars_clean = []
     
-    # Expenses
-    exp_ops = f_gen['قيمة المصروف'].sum() if not f_gen.empty else 0
-    exp_maint = f_car_exp['قيمة المصروف'].sum() if not f_car_exp.empty else 0
-    exp_owner = f_liab['Amount'].sum() if not f_liab.empty else 0
-    
-    total_exp = exp_ops + exp_maint + exp_owner
-    net_profit = rev - total_exp
+    if not df_cars_raw.empty:
+        # We convert to list of lists for safe index access
+        # (This avoids column name issues if they change)
+        raw_values = df_cars_raw.values.tolist()
+        
+        for row in raw_values:
+            # Safe getter
+            def get(col_letter):
+                idx = excel_col_to_index(col_letter)
+                if idx < len(row): return row[idx]
+                return None
 
-    # HEADER
-    st.title(f"📊 تقرير شهر {sel_month} / {sel_year}")
+            code = str(get('A') or '').strip()
+            if not code: continue
+
+            # 1. Construct Name (Type B + Model E + Year H + Color J + Seats O)
+            c_name = f"{get('B') or ''} {get('E') or ''} ({get('H') or ''}) - {get('J') or ''} - {get('O') or ''} Seats"
+            
+            # 2. Construct Plate (AC, AB, AA, Z, Y, X, W)
+            plate = f"{get('AC') or ''} {get('AB') or ''} {get('AA') or ''} {get('Z') or ''} {get('Y') or ''} {get('X') or ''} {get('W') or ''}"
+            
+            # 3. Status (BA)
+            status_raw = str(get('BA') or '')
+            is_active = 'ساري' in status_raw or 'Valid' in status_raw
+            
+            # 4. Dates & KM
+            km_start = clean_money(get('AV'))
+            lic_end = pd.to_datetime(get('AQ'), errors='coerce')
+            ins_end = pd.to_datetime(get('BK'), errors='coerce')
+            contract_end = pd.to_datetime(get('AX'), errors='coerce')
+            
+            # 5. Owner Payment Logic
+            pay_amt = clean_money(get('CJ'))
+            pay_freq = clean_money(get('CK'))
+            pay_start = pd.to_datetime(get('CL'), errors='coerce')
+            
+            cars_clean.append({
+                'Code': code,
+                'Name': c_name,
+                'Plate': plate,
+                'Active': is_active,
+                'KM_Start': km_start,
+                'License_End': lic_end,
+                'Insurance_End': ins_end,
+                'Contract_End': contract_end,
+                'Pay_Amount': pay_amt,
+                'Pay_Freq': int(pay_freq) if pay_freq > 0 else 45,
+                'Pay_Start': pay_start
+            })
     
-    # KPIS
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("صافي الربح (Net)", f"{net_profit:,.0f}", delta="After Owner Fees")
-    c2.metric("الإيرادات (Revenue)", f"{rev:,.0f}")
-    c3.metric("مستحقات الملاك (Owners)", f"{exp_owner:,.0f}", delta_color="inverse")
-    c4.metric("مصروفات الصيانة (Maint)", f"{exp_maint:,.0f}", delta_color="inverse")
-    c5.metric("مصروفات إدارية (Ops)", f"{exp_ops:,.0f}", delta_color="inverse")
+    df_cars = pd.DataFrame(cars_clean)
+    
+    # --- B. PROCESS FINANCIALS & FILTERS ---
+    
+    # 1. Filter Financials by Month
+    def filter_month(df):
+        if df.empty: return df
+        # Heuristic: Look for 'شهر' and 'سنة' or 'Month' and 'Year'
+        y_col = next((c for c in df.columns if 'سنة' in c or 'Year' in c), None)
+        m_col = next((c for c in df.columns if 'شهر' in c or 'Month' in c), None)
+        if y_col and m_col:
+            # Ensure filtering works with mixed types
+            return df[
+                (df[y_col].astype(str).str.contains(str(sel_year))) & 
+                (df[m_col].astype(str).str.contains(str(sel_month)))
+            ]
+        return df
+
+    df_coll_m = filter_month(dfs['coll'])
+    df_gen_m = filter_month(dfs['gen'])
+    df_car_exp_m = filter_month(dfs['car_exp'])
+    
+    # Clean Money
+    for d in [df_coll_m, df_gen_m, df_car_exp_m]:
+        for c in d.columns:
+            if 'قيمة' in c: d[c] = d[c].apply(clean_money)
+
+    # 2. Calculate Owner Liabilities for Selected Month
+    owner_liabilities = []
+    total_owner_fees = 0
+    
+    for _, car in df_cars.iterrows():
+        # Only calculate if Active and has Payment info
+        if not car['Active'] or pd.isna(car['Pay_Start']) or car['Pay_Amount'] == 0:
+            continue
+            
+        # Generate Schedule
+        curr = car['Pay_Start']
+        end = car['Contract_End'] if pd.notnull(car['Contract_End']) else datetime(2030, 1, 1)
+        
+        while curr <= end:
+            # Check if this occurrence falls in selected month
+            if curr.year == sel_year and curr.month == sel_month:
+                # AUDIT: Did we pay this?
+                # Look in Car Expenses (df_car_exp_m) for this Car Code + Similar Amount
+                status = "PENDING"
+                match_row = ""
+                
+                if not df_car_exp_m.empty:
+                    # Find Code Col
+                    exp_code_col = next((c for c in df_car_exp_m.columns if 'كود السيارة' in c), None)
+                    exp_val_col = next((c for c in df_car_exp_m.columns if 'قيمة' in c), None)
+                    
+                    if exp_code_col and exp_val_col:
+                        # Filter for car
+                        matches = df_car_exp_m[df_car_exp_m[exp_code_col].astype(str).str.strip() == car['Code']]
+                        for idx, m in matches.iterrows():
+                            # Check amount (tolerance 10%)
+                            if abs(clean_money(m[exp_val_col]) - car['Pay_Amount']) < (car['Pay_Amount'] * 0.1):
+                                status = "PAID"
+                                match_row = f"Row {idx+2}" # Excel row approx
+                                break
+                
+                owner_liabilities.append({
+                    'Due Date': curr.strftime('%Y-%m-%d'),
+                    'Car': car['Name'],
+                    'Code': car['Code'],
+                    'Amount': car['Pay_Amount'],
+                    'Status': status,
+                    'Note': match_row
+                })
+                total_owner_fees += car['Pay_Amount']
+                
+            curr += timedelta(days=car['Pay_Freq'])
+
+    df_liab = pd.DataFrame(owner_liabilities)
+
+    # 3. Profit Calculation
+    rev = df_coll_m['قيمة التحصيل'].sum() if not df_coll_m.empty else 0
+    exp_ops = df_gen_m['قيمة المصروف'].sum() if not df_gen_m.empty else 0
+    exp_maint = df_car_exp_m['قيمة المصروف'].sum() if not df_car_exp_m.empty else 0
+    
+    # Net Profit = Revenue - (Ops + Maintenance + Owner Fees)
+    # Note: If Owner Fees are ALREADY in Car Expenses, we shouldn't double count.
+    # Logic: We subtract 'exp_maint' (which comes from the sheet). 
+    # If the user logs owner payments in that sheet, it's covered. 
+    # If not, we might need to add 'Pending' owner fees. 
+    # For now, let's show Profit based on ACTUAL cash flow (Sheet data) + Warning for Pending.
+    
+    total_actual_exp = exp_ops + exp_maint
+    cash_profit = rev - total_actual_exp
+    
+    # --- DASHBOARD UI ---
+    st.title(f"📊 Dashboard: {sel_month} / {sel_year}")
+    
+    # KPI ROW
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Cash Profit (Actual)", f"{cash_profit:,.0f} EGP", delta="Cash Flow")
+    k2.metric("Revenue", f"{rev:,.0f} EGP")
+    k3.metric("Expenses (Ops + Maint)", f"{total_actual_exp:,.0f} EGP", delta_color="inverse")
+    k4.metric("Owner Fees Due", f"{total_owner_fees:,.0f} EGP", "Liability")
 
     st.markdown("---")
 
     # TABS
-    tab_fleet, tab_owners, tab_trends, tab_ai = st.tabs(["🚗 أداء الأسطول", "🤝 مستحقات الملاك", "📈 المؤشرات", "🧠 المدير الذكي"])
+    tab_fleet, tab_owners, tab_fin, tab_alert, tab_ai = st.tabs([
+        "🚗 Fleet (الأسطول)", "🤝 Owner Payments (مستحقات)", "📉 Financials (المالية)", "⚠️ Alerts (تنبيهات)", "🧠 AI"
+    ])
 
     with tab_fleet:
-        col_a, col_b = st.columns([2,1])
-        with col_a:
-            st.subheader("تفاصيل أداء السيارات (Revenue & Profit)")
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.subheader("Active Fleet Status")
+            # Filter Active
+            active = df_cars[df_cars['Active'] == True]
+            inactive = df_cars[df_cars['Active'] == False]
             
-            # Group Revenue by Car
-            if not f_ord.empty:
-                car_code = next((c for c in f_ord.columns if 'كود السيارة' in c), 'Car_ID')
-                car_rev = f_ord.groupby(car_code)['Total_Cost'].sum().reset_index()
-                car_rev.columns = ['Car_ID', 'Revenue']
-                car_rev['Car_ID'] = car_rev['Car_ID'].astype(str).str.strip()
-            else: car_rev = pd.DataFrame(columns=['Car_ID', 'Revenue'])
-
-            # Group Owner Fees
-            if not f_liab.empty:
-                car_liab = f_liab.groupby('Car_ID')['Amount'].sum().reset_index()
-                car_liab.columns = ['Car_ID', 'Owner_Fee']
-            else: car_liab = pd.DataFrame(columns=['Car_ID', 'Owner_Fee'])
-
-            # Merge
-            stats = pd.merge(car_rev, car_liab, on='Car_ID', how='outer').fillna(0)
-            stats['Car_Name'] = stats['Car_ID'].map(car_map).fillna(stats['Car_ID'])
-            stats['Net_Profit'] = stats['Revenue'] - stats['Owner_Fee']
-            
-            # Filter for active/rented only? No, show all that incurred cost or rev
-            stats = stats.sort_values('Net_Profit', ascending=False)
-            
+            st.success(f"Active Cars: {len(active)}")
             st.dataframe(
-                stats[['Car_Name', 'Revenue', 'Owner_Fee', 'Net_Profit']],
-                use_container_width=True,
-                column_config={
-                    "Revenue": st.column_config.NumberColumn(format="%d EGP"),
-                    "Owner_Fee": st.column_config.NumberColumn(format="%d EGP"),
-                    "Net_Profit": st.column_config.ProgressColumn(format="%d EGP", min_value=-5000, max_value=int(stats['Net_Profit'].max() if not stats.empty else 10000))
-                }
-            )
-            
-            # Idle Cars Logic
-            all_cars = set(car_map.keys())
-            active_cars = set(stats['Car_ID'].unique())
-            idle_cars = all_cars - active_cars
-            if idle_cars:
-                st.warning(f"⚠️ السيارات غير المؤجرة هذا الشهر ({len(idle_cars)}): " + ", ".join([car_map.get(c,c) for c in list(idle_cars)[:5]]) + "...")
-
-        with col_b:
-            st.subheader("أهم العملاء")
-            if not f_ord.empty:
-                 client_col = next((c for c in f_ord.columns if 'كود العميل' in c), None)
-                 if client_col:
-                     top_c = f_ord[client_col].value_counts().head(10).reset_index()
-                     top_c.columns = ['ID', 'Rentals']
-                     # Name map
-                     df_cli = dfs['clients']
-                     c_id = next((c for c in df_cli.columns if 'No' in c), None)
-                     c_name = next((c for c in df_cli.columns if 'اسم' in c), None)
-                     if c_id and c_name:
-                         df_cli[c_id] = df_cli[c_id].astype(str).str.strip()
-                         cmap = df_cli.set_index(c_id)[c_name].to_dict()
-                         top_c['Name'] = top_c['ID'].astype(str).map(cmap).fillna(top_c['ID'])
-                     else: top_c['Name'] = top_c['ID']
-                     
-                     st.table(top_c[['Name', 'Rentals']])
-
-    with tab_owners:
-        st.subheader("جدول مدفوعات الملاك المستحقة (Estimated)")
-        st.info("تم حساب هذه القيم بناءً على العقود (كل 45 يوم أو حسب العقد) للسيارات السارية فقط.")
-        if not f_liab.empty:
-            st.dataframe(
-                f_liab[['Date', 'Car_Name', 'Amount']].sort_values('Date'),
+                active[['Code', 'Name', 'Plate', 'KM_Start', 'Contract_End']],
                 use_container_width=True
             )
-            st.metric("إجمالي المستحق للملاك هذا الشهر", f"{exp_owner:,.0f} EGP")
+            
+            if not inactive.empty:
+                with st.expander(f"Show Inactive/Expired Cars ({len(inactive)})"):
+                    st.dataframe(inactive[['Code', 'Name', 'Contract_End']])
+
+        with c2:
+            st.subheader("Current KM")
+            st.info("Contract Start KM displayed. Update Orders sheet to calculate current KM.")
+            # Simple table for KM
+            st.dataframe(active[['Code', 'KM_Start']], use_container_width=True)
+
+    with tab_owners:
+        st.subheader("Owner Payment Schedule (This Month)")
+        if not df_liab.empty:
+            # Coloring
+            def color_status(val):
+                color = '#d4edda' if val == 'PAID' else '#f8d7da'
+                return f'background-color: {color}; color: black'
+            
+            st.dataframe(
+                df_liab.style.applymap(color_status, subset=['Status']),
+                use_container_width=True
+            )
         else:
-            st.write("لا توجد مستحقات دفع للملاك في هذا الشهر.")
+            st.success("No owner payments due this month.")
 
-    with tab_trends:
-        st.subheader("تطور الأداء المالي (Yearly Trend)")
-        # Aggregate by month for the whole year
-        if 'Date' in df_liabilities.columns:
-            trend_liab = df_liabilities[df_liabilities['Date'].dt.year == sel_year].groupby(df_liabilities['Date'].dt.month)['Amount'].sum()
-        else: trend_liab = pd.Series()
+    with tab_fin:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Revenue vs Expenses")
+            fig = px.bar(x=['Revenue', 'Expenses', 'Owner Liability'], 
+                         y=[rev, total_actual_exp, total_owner_fees],
+                         color=['Rev', 'Exp', 'Liab'],
+                         color_discrete_sequence=['green', 'red', 'orange'])
+            st.plotly_chart(fig, use_container_width=True)
         
-        # We need a proper date column in Orders for this
-        if 'Date' in df_ord.columns:
-            trend_rev = df_ord[df_ord['Date'].dt.year == sel_year].groupby(df_ord['Date'].dt.month)['Total_Cost'].sum()
-        else: trend_rev = pd.Series()
+        with c2:
+            st.subheader("Expense Breakdown")
+            # Combine
+            if not df_gen_m.empty:
+                df_gen_m['Category'] = 'General'
+            if not df_car_exp_m.empty:
+                df_car_exp_m['Category'] = 'Car Maint'
+            
+            # Prepare Treemap Data
+            items = []
+            if not df_gen_m.empty:
+                # Find item col
+                col = next((c for c in df_gen_m.columns if 'بيان' in c), 'Item')
+                items.append(df_gen_m[[col, 'قيمة المصروف']].rename(columns={col:'Item', 'قيمة المصروف':'Value'}))
+            
+            if not df_car_exp_m.empty:
+                col = next((c for c in df_car_exp_m.columns if 'نوع' in c), 'Item')
+                items.append(df_car_exp_m[[col, 'قيمة المصروف']].rename(columns={col:'Item', 'قيمة المصروف':'Value'}))
+            
+            if items:
+                full_exp = pd.concat(items)
+                fig2 = px.treemap(full_exp, path=['Item'], values='Value')
+                st.plotly_chart(fig2, use_container_width=True)
 
-        trend_df = pd.DataFrame({'Revenue': trend_rev, 'Owner_Pay': trend_liab}).fillna(0)
-        st.line_chart(trend_df)
+    with tab_alert:
+        c1, c2 = st.columns(2)
+        
+        # Logic: Expiry in next 3 and 6 months
+        limit_3m = today + timedelta(days=90)
+        limit_6m = today + timedelta(days=180)
+        
+        alerts_lic = []
+        alerts_ins = []
+        
+        for _, car in df_cars.iterrows():
+            # License
+            if pd.notnull(car['License_End']):
+                if today < car['License_End'] <= limit_3m:
+                    alerts_lic.append({'Car': car['Name'], 'Date': car['License_End'], 'Priority': 'HIGH (3 Mo)'})
+                elif limit_3m < car['License_End'] <= limit_6m:
+                    alerts_lic.append({'Car': car['Name'], 'Date': car['License_End'], 'Priority': 'Medium (6 Mo)'})
+            
+            # Insurance
+            if pd.notnull(car['Insurance_End']):
+                if today < car['Insurance_End'] <= limit_3m:
+                    alerts_ins.append({'Car': car['Name'], 'Date': car['Insurance_End'], 'Priority': 'HIGH (3 Mo)'})
+                elif limit_3m < car['Insurance_End'] <= limit_6m:
+                    alerts_ins.append({'Car': car['Name'], 'Date': car['Insurance_End'], 'Priority': 'Medium (6 Mo)'})
+        
+        with c1:
+            st.subheader("📄 License Expiry Alerts")
+            if alerts_lic:
+                st.table(pd.DataFrame(alerts_lic))
+            else:
+                st.success("No licenses expiring soon.")
+                
+        with c2:
+            st.subheader("🛡️ Insurance Expiry Alerts")
+            if alerts_ins:
+                st.table(pd.DataFrame(alerts_ins))
+            else:
+                st.success("No insurance policies expiring soon.")
 
     with tab_ai:
-        if st.button("تحليل البيانات بواسطة Gemini"):
+        if st.button("Generate AI Briefing"):
             if 'GOOGLE_API_KEY' not in st.secrets:
-                st.error("Add API Key")
+                st.error("Missing Google API Key")
             else:
-                os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-                llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=st.secrets["GOOGLE_API_KEY"])
-                prompt = f"""
-                Analyze my car rental business for {sel_month}/{sel_year}:
-                - Revenue: {rev}
-                - Owner Obligations: {exp_owner}
-                - Maintenance: {exp_maint}
-                - Net Profit: {net_profit}
-                
-                Give me a strategic summary in Arabic regarding cash flow and fleet efficiency.
-                """
-                advisor = Agent(role='Advisor', goal='Strategy', backstory='Expert', llm=llm)
-                task = Task(description=prompt, agent=advisor, expected_output="Summary")
-                crew = Crew(agents=[advisor], tasks=[task])
-                st.markdown(crew.kickoff())
+                with st.spinner("Analyzing..."):
+                    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+                    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=st.secrets["GOOGLE_API_KEY"])
+                    
+                    prompt = f"""
+                    Role: Business Consultant for Egypt Car Rental.
+                    Data for {sel_month}/{sel_year}:
+                    - Revenue: {rev}
+                    - Cash Expenses: {total_actual_exp}
+                    - Owner Liabilities: {total_owner_fees}
+                    - Cash Profit: {cash_profit}
+                    - Active Cars: {len(active)}
+                    
+                    Alerts:
+                    - License Expiring: {len(alerts_lic)}
+                    - Insurance Expiring: {len(alerts_ins)}
+                    
+                    Task: Write a professional executive summary in Arabic. Highlight cash flow status, upcoming financial obligations (Owner payments), and operational risks (expiries).
+                    """
+                    
+                    advisor = Agent(role='Advisor', goal='Analysis', backstory='Expert', llm=llm)
+                    task = Task(description=prompt, agent=advisor, expected_output="Briefing")
+                    crew = Crew(agents=[advisor], tasks=[task])
+                    st.markdown(crew.kickoff())
