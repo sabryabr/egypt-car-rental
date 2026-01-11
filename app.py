@@ -29,16 +29,13 @@ st.markdown("""
     [data-testid="stMetricLabel"] { color: #6c757d !important; font-size: 0.9rem; }
     [data-testid="stMetricValue"] { color: #212529 !important; font-weight: 700; font-size: 1.6rem; }
     
-    .status-valid { color: #198754; font-weight: bold; }
-    .status-expired { color: #dc3545; font-weight: bold; }
-    
     .stDataFrame { direction: ltr; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. HELPERS ---
 def excel_col_to_index(col_str):
-    """ Converts Excel Column Letter (e.g., 'BA', 'CJ') to zero-based index """
+    """ Converts Excel Column Letter (e.g., 'BA') to zero-based index """
     num = 0
     for c in col_str:
         if c.upper() in string.ascii_uppercase:
@@ -70,7 +67,20 @@ def load_data():
             if not vals: return pd.DataFrame()
             
             if len(vals) > header_row:
-                headers = vals[header_row]
+                raw_headers = vals[header_row]
+                
+                # --- FIX DUPLICATE HEADERS ---
+                headers = []
+                seen_counts = {}
+                for h in raw_headers:
+                    h_str = str(h).strip()
+                    if h_str in seen_counts:
+                        seen_counts[h_str] += 1
+                        headers.append(f"{h_str}_{seen_counts[h_str]}")
+                    else:
+                        seen_counts[h_str] = 0
+                        headers.append(h_str)
+                
                 data = vals[header_row+1:]
                 max_len = len(headers)
                 clean_data = [row[:max_len] + [None]*(max_len-len(row)) for row in data]
@@ -91,9 +101,7 @@ def load_data():
     }
 
     dfs = {}
-    # --- FIXED: Pointing 'cars' to the 'Entries' tab, not 'Database' tab ---
     dfs['cars'] = get_sheet(ids['cars'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0) 
-    
     dfs['coll'] = get_sheet(ids['coll'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
     dfs['gen'] = get_sheet(ids['gen'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
     dfs['car_exp'] = get_sheet(ids['car_exp'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
@@ -119,35 +127,29 @@ if dfs:
         raw_values = df_cars_raw.values.tolist()
         
         for row in raw_values:
-            # Helper to get column value by Excel Letter
             def get(col_letter):
                 idx = excel_col_to_index(col_letter)
                 if idx < len(row): return row[idx]
                 return None
 
             code = str(get('A') or '').strip()
-            if not code or code == 'None' or code == 'No.': continue # Skip empty or header
+            if not code or code == 'None' or code == 'No.': continue 
 
-            # 1. Name: Type(B) + Model(E) + Year(H) + Color(J) + Seats(O)
             c_name = f"{get('B') or ''} {get('E') or ''} ({get('H') or ''}) - {get('J') or ''}"
             
-            # 2. Plate: AC, AB, AA, Z, Y, X, W
             plate_parts = [get('AC'), get('AB'), get('AA'), get('Z'), get('Y'), get('X'), get('W')]
             plate = " ".join([str(p) for p in plate_parts if p]).strip()
             
-            # 3. Status (BA) - Loose matching
             status_raw = str(get('BA') or '')
             is_active = False
             if any(x in status_raw for x in ['ساري', 'Valid', 'valid', 'Active']):
                 is_active = True
             
-            # 4. Dates & KM
             km_start = clean_money(get('AV'))
             lic_end = pd.to_datetime(get('AQ'), errors='coerce')
             ins_end = pd.to_datetime(get('BK'), errors='coerce')
             contract_end = pd.to_datetime(get('AX'), errors='coerce')
             
-            # 5. Owner Payment Logic
             pay_amt = clean_money(get('CJ'))
             pay_freq = clean_money(get('CK'))
             pay_start = pd.to_datetime(get('CL'), errors='coerce')
@@ -157,7 +159,6 @@ if dfs:
                 'Name': c_name,
                 'Plate': plate,
                 'Active': is_active,
-                'Status_Raw': status_raw, # Debug
                 'KM_Start': km_start,
                 'License_End': lic_end,
                 'Insurance_End': ins_end,
@@ -169,7 +170,7 @@ if dfs:
     
     df_cars = pd.DataFrame(cars_clean)
     
-    # --- B. PROCESS FINANCIALS & FILTERS ---
+    # --- B. FINANCIALS ---
     def filter_month(df):
         if df.empty: return df
         y_col = next((c for c in df.columns if 'سنة' in c or 'Year' in c), None)
@@ -255,7 +256,7 @@ if dfs:
 
     with tab_fleet:
         if df_cars.empty:
-            st.error("No cars loaded. Please check 'Diagnostics' tab.")
+            st.error("No cars loaded.")
         else:
             c1, c2 = st.columns([3, 1])
             with c1:
@@ -263,7 +264,6 @@ if dfs:
                 active = df_cars[df_cars['Active'] == True]
                 inactive = df_cars[df_cars['Active'] == False]
                 
-                # Sort inactive by latest
                 if not inactive.empty:
                     inactive = inactive.sort_values(by='Contract_End', ascending=False)
 
@@ -279,13 +279,13 @@ if dfs:
                 st.dataframe(active[['Code', 'KM_Start']], use_container_width=True)
 
     with tab_owners:
-        st.subheader("Owner Payment Schedule (This Month)")
+        st.subheader("Owner Payment Schedule")
         if not df_liab.empty:
             def color_status(val):
                 return f'background-color: {"#d4edda" if val == "PAID" else "#f8d7da"}; color: black'
             st.dataframe(df_liab.style.applymap(color_status, subset=['Status']), use_container_width=True)
         else:
-            st.success("No owner payments due this month.")
+            st.success("No owner payments due.")
 
     with tab_fin:
         c1, c2 = st.columns(2)
@@ -366,8 +366,6 @@ if dfs:
 
     with tab_diag:
         st.subheader("🔧 Raw Data Check")
-        st.write("First 5 rows of CARS sheet (Check if columns match logic):")
-        st.dataframe(dfs['cars'].head(5))
-        if not df_cars.empty:
-            st.write("Processed Car Data (First 3):")
-            st.dataframe(df_cars[['Code', 'Name', 'Status_Raw', 'Active']].head(3))
+        if not dfs['cars'].empty:
+            st.write("Processed Car Data:")
+            st.dataframe(df_cars.head(3))
