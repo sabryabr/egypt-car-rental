@@ -19,23 +19,29 @@ st.markdown("""
     .main { direction: rtl; text-align: right; }
     h1, h2, h3, p, div { font-family: 'Cairo', sans-serif; }
     
+    /* Metrics */
     .stMetric { 
         background-color: #ffffff !important; 
         border-radius: 12px; 
         padding: 15px; 
         border: 1px solid #dee2e6;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
     [data-testid="stMetricLabel"] { color: #6c757d !important; font-size: 0.9rem; }
     [data-testid="stMetricValue"] { color: #212529 !important; font-weight: 700; font-size: 1.6rem; }
     
+    /* Table Headers */
     .stDataFrame { direction: ltr; }
+    
+    /* Status Badges */
+    .badge-high { background-color: #dc3545; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-med { background-color: #ffc107; color: black; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-low { background-color: #198754; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. HELPERS ---
 def excel_col_to_index(col_str):
-    """ Converts Excel Column Letter (e.g., 'BA') to zero-based index """
     num = 0
     for c in col_str:
         if c.upper() in string.ascii_uppercase:
@@ -47,6 +53,13 @@ def clean_money(x):
     s = str(x).replace(',', '')
     match = re.search(r"[-+]?\d*\.\d+|\d+", s)
     return float(match.group()) if match else 0.0
+
+def format_currency(x):
+    return f"{x:,.0f} EGP"
+
+def format_date(d):
+    if pd.isnull(d): return "-"
+    return d.strftime("%Y-%m-%d")
 
 # --- 3. DATA LOADER ---
 @st.cache_data(ttl=600)
@@ -68,17 +81,16 @@ def load_data():
             
             if len(vals) > header_row:
                 raw_headers = vals[header_row]
-                
-                # --- FIX DUPLICATE HEADERS ---
+                # Fix Duplicates
                 headers = []
-                seen_counts = {}
+                seen = {}
                 for h in raw_headers:
                     h_str = str(h).strip()
-                    if h_str in seen_counts:
-                        seen_counts[h_str] += 1
-                        headers.append(f"{h_str}_{seen_counts[h_str]}")
+                    if h_str in seen:
+                        seen[h_str] += 1
+                        headers.append(f"{h_str}_{seen[h_str]}")
                     else:
-                        seen_counts[h_str] = 0
+                        seen[h_str] = 0
                         headers.append(h_str)
                 
                 data = vals[header_row+1:]
@@ -86,17 +98,14 @@ def load_data():
                 clean_data = [row[:max_len] + [None]*(max_len-len(row)) for row in data]
                 return pd.DataFrame(clean_data, columns=headers)
             return pd.DataFrame()
-        except Exception as e:
-            st.error(f"Error loading sheet: {e}")
-            return pd.DataFrame()
+        except Exception: return pd.DataFrame()
 
-    # IDS
     ids = {
+        'cars': "1fLr5mwDoRQ1P5g-t4uZ8mSY04xHiCSSisSWDbatx9dg",
         'coll': "1jtp-ihtAOt9NNHETZ5muiL5OA9yW3WrpBIIDAf5UAyg",
         'gen': "1hZoymf0CN1wOssc3ddQiZXxbJTdzJZBnamp_aCobl1Q",
         'car_exp': "1vDKKOywOEGfmLcHr4xk7KMTChHJ0_qquNopXpD81XVE",
         'orders': "16mLWxdxpV6DDaGfeLf-t1XDx25H4rVEbtx_hE88nF7A",
-        'cars': "1fLr5mwDoRQ1P5g-t4uZ8mSY04xHiCSSisSWDbatx9dg",
         'clients': "1izZeNVITKEKVCT4KUnb71uFO8pzCdpUs8t8FetAxbEg"
     }
 
@@ -114,18 +123,17 @@ def load_data():
 dfs = load_data()
 
 if dfs:
-    # --- TIME MACHINE (SIDEBAR) ---
-    st.sidebar.title("🔍 Time Filter")
+    # --- TIME FILTER ---
+    st.sidebar.title("📅 Time Control")
     sel_year = st.sidebar.selectbox("Year", [2024, 2025, 2026, 2027], index=2) 
     sel_month = st.sidebar.selectbox("Month", range(1, 13), index=0) 
 
-    # --- A. PROCESS CARS (THE ENGINE) ---
+    # --- A. CARS ENGINE ---
     df_cars_raw = dfs['cars']
     cars_clean = []
     
     if not df_cars_raw.empty:
         raw_values = df_cars_raw.values.tolist()
-        
         for row in raw_values:
             def get(col_letter):
                 idx = excel_col_to_index(col_letter)
@@ -133,23 +141,31 @@ if dfs:
                 return None
 
             code = str(get('A') or '').strip()
-            if not code or code == 'None' or code == 'No.': continue 
+            if not code or code in ['None', 'No.', 'كود']: continue 
 
-            c_name = f"{get('B') or ''} {get('E') or ''} ({get('H') or ''}) - {get('J') or ''}"
+            # Raw Data
+            c_type = str(get('B') or '').strip()
+            c_model = str(get('E') or '').strip()
+            c_year = str(get('H') or '').strip()
+            c_color = str(get('J') or '').strip()
+            c_seats = str(get('O') or '').strip()
+            
+            c_name = f"{c_type} {c_model} ({c_year}) - {c_color}"
             
             plate_parts = [get('AC'), get('AB'), get('AA'), get('Z'), get('Y'), get('X'), get('W')]
             plate = " ".join([str(p) for p in plate_parts if p]).strip()
             
             status_raw = str(get('BA') or '')
-            is_active = False
-            if any(x in status_raw for x in ['ساري', 'Valid', 'valid', 'Active']):
-                is_active = True
+            is_active = any(x in status_raw for x in ['ساري', 'Valid', 'valid', 'Active'])
             
             km_start = clean_money(get('AV'))
+            
+            # Dates
             lic_end = pd.to_datetime(get('AQ'), errors='coerce')
             ins_end = pd.to_datetime(get('BK'), errors='coerce')
             contract_end = pd.to_datetime(get('AX'), errors='coerce')
             
+            # Payments
             pay_amt = clean_money(get('CJ'))
             pay_freq = clean_money(get('CK'))
             pay_start = pd.to_datetime(get('CL'), errors='coerce')
@@ -157,6 +173,9 @@ if dfs:
             cars_clean.append({
                 'Code': code,
                 'Name': c_name,
+                'Type': c_type,
+                'Model': c_model,
+                'Year': c_year,
                 'Plate': plate,
                 'Active': is_active,
                 'KM_Start': km_start,
@@ -169,28 +188,8 @@ if dfs:
             })
     
     df_cars = pd.DataFrame(cars_clean)
-    
-    # --- B. FINANCIALS ---
-    def filter_month(df):
-        if df.empty: return df
-        y_col = next((c for c in df.columns if 'سنة' in c or 'Year' in c), None)
-        m_col = next((c for c in df.columns if 'شهر' in c or 'Month' in c), None)
-        if y_col and m_col:
-            return df[
-                (df[y_col].astype(str).str.contains(str(sel_year))) & 
-                (df[m_col].astype(str).str.contains(str(sel_month)))
-            ]
-        return df
 
-    df_coll_m = filter_month(dfs['coll'])
-    df_gen_m = filter_month(dfs['gen'])
-    df_car_exp_m = filter_month(dfs['car_exp'])
-    
-    for d in [df_coll_m, df_gen_m, df_car_exp_m]:
-        for c in d.columns:
-            if 'قيمة' in c: d[c] = d[c].apply(clean_money)
-
-    # 2. Owner Liabilities
+    # --- B. OWNER PAYMENTS (Calculated) ---
     owner_liabilities = []
     total_owner_fees = 0
     
@@ -200,172 +199,268 @@ if dfs:
                 continue
                 
             curr = car['Pay_Start']
+            # Fallback end date if missing
             end = car['Contract_End'] if pd.notnull(car['Contract_End']) else datetime(2035, 1, 1)
             
             while curr <= end:
                 if curr.year == sel_year and curr.month == sel_month:
-                    # AUDIT
-                    status = "PENDING"
-                    match_row = ""
-                    if not df_car_exp_m.empty:
-                        exp_code_col = next((c for c in df_car_exp_m.columns if 'كود السيارة' in c), None)
-                        exp_val_col = next((c for c in df_car_exp_m.columns if 'قيمة' in c), None)
-                        if exp_code_col and exp_val_col:
-                            matches = df_car_exp_m[df_car_exp_m[exp_code_col].astype(str).str.strip() == car['Code']]
-                            for idx, m in matches.iterrows():
-                                if abs(clean_money(m[exp_val_col]) - car['Pay_Amount']) < (car['Pay_Amount'] * 0.1):
-                                    status = "PAID"
-                                    match_row = f"Row {idx+2}"
-                                    break
-                    
                     owner_liabilities.append({
-                        'Due Date': curr.strftime('%Y-%m-%d'),
-                        'Car Name': car['Name'],
-                        'Code': car['Code'],
+                        'Due Date': curr, # Keep as object for sorting
+                        'Car': car['Name'],
                         'Amount': car['Pay_Amount'],
-                        'Status': status,
-                        'Ref': match_row
+                        'Status': 'Pending' # Simplified for speed
                     })
                     total_owner_fees += car['Pay_Amount']
                 curr += timedelta(days=car['Pay_Freq'])
 
     df_liab = pd.DataFrame(owner_liabilities)
+    if not df_liab.empty:
+        df_liab = df_liab.sort_values('Due Date') # Sort Sooner to Later
+        # Format Date for display
+        df_liab['Formatted Date'] = df_liab['Due Date'].dt.strftime('%Y-%m-%d')
+        df_liab['Formatted Amount'] = df_liab['Amount'].apply(format_currency)
 
-    # 3. Profit
+    # --- C. FINANCIALS (Aggregated) ---
+    # Helper for filtering
+    def filter_df(df, year, month=None):
+        if df.empty: return df
+        y_col = next((c for c in df.columns if 'سنة' in c or 'Year' in c), None)
+        m_col = next((c for c in df.columns if 'شهر' in c or 'Month' in c), None)
+        if y_col and m_col:
+            cond = df[y_col].astype(str).str.contains(str(year))
+            if month:
+                cond = cond & df[m_col].astype(str).str.contains(str(month))
+            return df[cond]
+        return df
+
+    # Monthly Data
+    df_coll_m = filter_df(dfs['coll'], sel_year, sel_month)
+    df_gen_m = filter_df(dfs['gen'], sel_year, sel_month)
+    df_car_exp_m = filter_df(dfs['car_exp'], sel_year, sel_month)
+    
+    # Clean Values
+    for d in [df_coll_m, df_gen_m, df_car_exp_m]:
+        for c in d.columns:
+            if 'قيمة' in c: d[c] = d[c].apply(clean_money)
+
     rev = df_coll_m['قيمة التحصيل'].sum() if not df_coll_m.empty else 0
     exp_ops = df_gen_m['قيمة المصروف'].sum() if not df_gen_m.empty else 0
     exp_maint = df_car_exp_m['قيمة المصروف'].sum() if not df_car_exp_m.empty else 0
     
-    total_actual_exp = exp_ops + exp_maint
-    cash_profit = rev - total_actual_exp
+    total_exp = exp_ops + exp_maint + total_owner_fees
+    net_profit = rev - total_exp
+    margin = (net_profit / rev * 100) if rev > 0 else 0
+
+    # --- D. ANNUAL TRENDS (Hidden Calculation) ---
+    trend_data = []
+    # Loop through all months of selected year for trend chart
+    df_coll_y = filter_df(dfs['coll'], sel_year)
+    df_gen_y = filter_df(dfs['gen'], sel_year)
+    df_car_y = filter_df(dfs['car_exp'], sel_year)
     
-    # --- DASHBOARD UI ---
-    st.title(f"📊 Dashboard: {sel_month} / {sel_year}")
-    
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Cash Profit (Actual)", f"{cash_profit:,.0f} EGP", delta="Cash Flow")
-    k2.metric("Revenue", f"{rev:,.0f} EGP")
-    k3.metric("Expenses (Ops + Maint)", f"{total_actual_exp:,.0f} EGP", delta_color="inverse")
-    k4.metric("Owner Fees Due", f"{total_owner_fees:,.0f} EGP", delta_color="off")
+    # We need to group by month. Assuming 'شهر' column exists and is numeric-ish
+    # This is a bit complex with dirty data, so we'll do a robust groupby
+    try:
+        if not df_coll_y.empty:
+            m_col = next((c for c in df_coll_y.columns if 'شهر' in c), None)
+            val_col = next((c for c in df_coll_y.columns if 'قيمة' in c), None)
+            if m_col and val_col:
+                rev_trend = df_coll_y.groupby(m_col)[val_col].sum().reset_index()
+                rev_trend.columns = ['Month', 'Revenue']
+            else: rev_trend = pd.DataFrame()
+    except: rev_trend = pd.DataFrame()
+
+    # --- UI START ---
+    st.title(f"📊 Report: {sel_month} / {sel_year}")
+
+    # 1. TOP METRICS
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Net Profit (Final)", format_currency(net_profit), delta=f"{margin:.1f}% Margin")
+    m2.metric("Total Revenue", format_currency(rev))
+    m3.metric("Owner Liabilities", format_currency(total_owner_fees), delta_color="off")
+    m4.metric("Operational Exp", format_currency(exp_ops + exp_maint), delta_color="inverse")
 
     st.markdown("---")
 
-    tab_fleet, tab_owners, tab_fin, tab_alert, tab_ai, tab_diag = st.tabs([
-        "🚗 Fleet (الأسطول)", "🤝 Owner Payments (مستحقات)", "📉 Financials (المالية)", "⚠️ Alerts (تنبيهات)", "🧠 AI", "🔧 Diagnostics"
-    ])
+    # 2. TABS
+    tabs = st.tabs(["🚗 Fleet Intelligence", "💰 Financial Analysis", "🤝 Owner Payments", "⚠️ Risk & Alerts", "🧠 AI Insight"])
 
-    with tab_fleet:
-        if df_cars.empty:
-            st.error("No cars loaded.")
-        else:
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                st.subheader("Active Fleet Status")
-                active = df_cars[df_cars['Active'] == True]
-                inactive = df_cars[df_cars['Active'] == False]
-                
-                if not inactive.empty:
-                    inactive = inactive.sort_values(by='Contract_End', ascending=False)
-
-                st.success(f"Active Cars: {len(active)}")
-                st.dataframe(active[['Code', 'Name', 'Plate', 'KM_Start', 'Contract_End']], use_container_width=True)
-                
-                if not inactive.empty:
-                    st.markdown("### ❌ Inactive / Expired Contracts")
-                    st.dataframe(inactive[['Code', 'Name', 'Contract_End', 'Pay_Amount']], use_container_width=True)
-
-            with c2:
-                st.subheader("KM Tracker")
-                st.dataframe(active[['Code', 'KM_Start']], use_container_width=True)
-
-    with tab_owners:
-        st.subheader("Owner Payment Schedule")
-        if not df_liab.empty:
-            def color_status(val):
-                return f'background-color: {"#d4edda" if val == "PAID" else "#f8d7da"}; color: black'
-            st.dataframe(df_liab.style.applymap(color_status, subset=['Status']), use_container_width=True)
-        else:
-            st.success("No owner payments due.")
-
-    with tab_fin:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Revenue vs Expenses")
-            fig = px.bar(x=['Revenue', 'Expenses', 'Owner Liability'], 
-                         y=[rev, total_actual_exp, total_owner_fees],
-                         color=['Rev', 'Exp', 'Liab'],
-                         color_discrete_sequence=['green', 'red', 'orange'])
-            st.plotly_chart(fig, use_container_width=True)
+    # --- TAB 1: FLEET ---
+    with tabs[0]:
+        c1, c2 = st.columns([2, 1])
         
-        with c2:
-            st.subheader("Expense Breakdown")
-            items = []
-            if not df_gen_m.empty:
-                col = next((c for c in df_gen_m.columns if 'بيان' in c), 'Item')
-                items.append(df_gen_m[[col, 'قيمة المصروف']].rename(columns={col:'Item', 'قيمة المصروف':'Value'}))
-            if not df_car_exp_m.empty:
-                col = next((c for c in df_car_exp_m.columns if 'نوع' in c), 'Item')
-                items.append(df_car_exp_m[[col, 'قيمة المصروف']].rename(columns={col:'Item', 'قيمة المصروف':'Value'}))
+        # Segregation Logic
+        active_cars = df_cars[df_cars['Active'] == True]
+        inactive_cars = df_cars[df_cars['Active'] == False]
+        
+        with c1:
+            st.subheader("Fleet Composition")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Total Fleet", len(df_cars))
+            k2.metric("Active Cars", len(active_cars))
+            k3.metric("Inactive/Returned", len(inactive_cars))
             
-            if items:
-                full_exp = pd.concat(items)
-                if not full_exp.empty and full_exp['Value'].sum() > 0:
-                    fig2 = px.treemap(full_exp, path=['Item'], values='Value')
-                    st.plotly_chart(fig2, use_container_width=True)
+            if not active_cars.empty:
+                # Grouping
+                grp_type = active_cars['Type'].value_counts().reset_index()
+                grp_type.columns = ['Type', 'Count']
+                
+                fig_type = px.pie(grp_type, names='Type', values='Count', title="Active Fleet by Type", hole=0.4)
+                st.plotly_chart(fig_type, use_container_width=True)
 
-    with tab_alert:
-        c1, c2 = st.columns(2)
-        today = datetime.today()
-        limit_3m = today + timedelta(days=90)
-        limit_6m = today + timedelta(days=180)
-        
-        alerts_lic = []
-        alerts_ins = []
-        
-        if not df_cars.empty:
-            for _, car in df_cars.iterrows():
-                if not car['Active']: continue 
+                st.subheader("Active Fleet List (Sorted by Latest Contract)")
+                active_cars = active_cars.sort_values('Contract_End', ascending=False)
                 
-                if pd.notnull(car['License_End']):
-                    if today < car['License_End'] <= limit_3m:
-                        alerts_lic.append({'Car': car['Name'], 'Date': car['License_End'], 'Priority': 'HIGH'})
-                    elif limit_3m < car['License_End'] <= limit_6m:
-                        alerts_lic.append({'Car': car['Name'], 'Date': car['License_End'], 'Priority': 'Medium'})
-                
-                if pd.notnull(car['Insurance_End']):
-                    if today < car['Insurance_End'] <= limit_3m:
-                        alerts_ins.append({'Car': car['Name'], 'Date': car['Insurance_End'], 'Priority': 'HIGH'})
-                    elif limit_3m < car['Insurance_End'] <= limit_6m:
-                        alerts_ins.append({'Car': car['Name'], 'Date': car['Insurance_End'], 'Priority': 'Medium'})
+                # Formatted Display
+                disp_active = active_cars[['Code', 'Name', 'Plate', 'KM_Start', 'Contract_End']].copy()
+                disp_active['Contract_End'] = disp_active['Contract_End'].apply(format_date)
+                st.dataframe(disp_active, use_container_width=True)
+        
+        with c2:
+            st.subheader("Inactive Fleet")
+            if not inactive_cars.empty:
+                inactive_cars = inactive_cars.sort_values('Contract_End', ascending=False)
+                disp_inactive = inactive_cars[['Code', 'Name', 'Contract_End']].copy()
+                disp_inactive['Contract_End'] = disp_inactive['Contract_End'].apply(format_date)
+                st.dataframe(disp_inactive, use_container_width=True)
+            else:
+                st.info("No inactive cars.")
+
+    # --- TAB 2: FINANCIALS ---
+    with tabs[1]:
+        c1, c2 = st.columns([2, 1])
         
         with c1:
-            st.subheader("📄 License Expiry")
-            st.table(pd.DataFrame(alerts_lic) if alerts_lic else pd.DataFrame(columns=['None']))
-        with c2:
-            st.subheader("🛡️ Insurance Expiry")
-            st.table(pd.DataFrame(alerts_ins) if alerts_ins else pd.DataFrame(columns=['None']))
-
-    with tab_ai:
-        if st.button("Generate AI Briefing"):
-            if 'GOOGLE_API_KEY' not in st.secrets:
-                st.error("Missing Google API Key")
+            st.subheader(f"Financial Position ({sel_year} Trend)")
+            if 'rev_trend' in locals() and not rev_trend.empty:
+                fig_trend = px.bar(rev_trend, x='Month', y='Revenue', title="Monthly Revenue Trend")
+                st.plotly_chart(fig_trend, use_container_width=True)
             else:
-                with st.spinner("Analyzing..."):
+                st.info("Trend data requires more entries in Collections sheet.")
+                
+            # Profit Waterfall
+            fig_waterfall = go.Figure(go.Waterfall(
+                measure = ["relative", "relative", "relative", "relative", "total"],
+                x = ["Revenue", "Owner Fees", "Car Maint", "Ops Expenses", "Net Profit"],
+                y = [rev, -total_owner_fees, -exp_maint, -exp_ops, net_profit],
+                connector = {"line":{"color":"rgb(63, 63, 63)"}},
+            ))
+            fig_waterfall.update_layout(title = "Profit Waterfall (This Month)")
+            st.plotly_chart(fig_waterfall, use_container_width=True)
+
+        with c2:
+            st.subheader("Profit Margin")
+            fig_gauge = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = margin,
+                title = {'text': "Margin %"},
+                gauge = {'axis': {'range': [-10, 100]}, 'bar': {'color': "green" if margin > 20 else "orange"}}
+            ))
+            st.plotly_chart(fig_gauge, use_container_width=True)
+
+    # --- TAB 3: OWNER PAYMENTS ---
+    with tabs[2]:
+        st.subheader(f"Owner Obligations: {sel_month}/{sel_year}")
+        if not df_liab.empty:
+            st.dataframe(
+                df_liab[['Formatted Date', 'Car', 'Formatted Amount', 'Status']],
+                use_container_width=True
+            )
+            st.metric("Total Payable", format_currency(total_owner_fees))
+        else:
+            st.success("No payments due this month.")
+
+    # --- TAB 4: ALERTS (Redesigned) ---
+    with tabs[3]:
+        st.subheader("🚨 Expiry Risk Management")
+        
+        today = datetime.today()
+        range_high = today + timedelta(days=90)  # 3 Mo
+        range_med = today + timedelta(days=180) # 6 Mo
+        range_low = today + timedelta(days=365) # 1 Year
+        
+        alerts = []
+        
+        for _, car in df_cars.iterrows():
+            if not car['Active']: continue
+            
+            # Check License
+            if pd.notnull(car['License_End']):
+                risk = None
+                if today < car['License_End'] <= range_high: risk = "HIGH (0-3 Mo)"
+                elif range_high < car['License_End'] <= range_med: risk = "MEDIUM (3-6 Mo)"
+                elif range_med < car['License_End'] <= range_low: risk = "LOW (6-12 Mo)"
+                
+                if risk:
+                    alerts.append({'Car': car['Name'], 'Type': 'License', 'Date': car['License_End'], 'Risk': risk})
+
+            # Check Insurance
+            if pd.notnull(car['Insurance_End']):
+                risk = None
+                if today < car['Insurance_End'] <= range_high: risk = "HIGH (0-3 Mo)"
+                elif range_high < car['Insurance_End'] <= range_med: risk = "MEDIUM (3-6 Mo)"
+                elif range_med < car['Insurance_End'] <= range_low: risk = "LOW (6-12 Mo)"
+                
+                if risk:
+                    alerts.append({'Car': car['Name'], 'Type': 'Insurance', 'Date': car['Insurance_End'], 'Risk': risk})
+
+        if alerts:
+            df_alerts = pd.DataFrame(alerts)
+            df_alerts['Date'] = df_alerts['Date'].apply(format_date)
+            
+            # Sort by Date
+            df_alerts = df_alerts.sort_values('Date')
+            
+            # Separate Tables
+            high = df_alerts[df_alerts['Risk'].str.contains("HIGH")]
+            med = df_alerts[df_alerts['Risk'].str.contains("MEDIUM")]
+            low = df_alerts[df_alerts['Risk'].str.contains("LOW")]
+            
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.error(f"🔴 High Risk ({len(high)})")
+                st.dataframe(high[['Car', 'Type', 'Date']], hide_index=True)
+            with c2:
+                st.warning(f"🟡 Medium Risk ({len(med)})")
+                st.dataframe(med[['Car', 'Type', 'Date']], hide_index=True)
+            with c3:
+                st.success(f"🟢 Low Risk ({len(low)})")
+                st.dataframe(low[['Car', 'Type', 'Date']], hide_index=True)
+        else:
+            st.success("Everything looks good! No upcoming expiries in 12 months.")
+
+    # --- TAB 5: AI ---
+    with tabs[4]:
+        if st.button("Generate Executive Briefing"):
+            if 'GOOGLE_API_KEY' not in st.secrets:
+                st.error("Missing API Key")
+            else:
+                with st.spinner("AI is analyzing all tabs..."):
                     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
                     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=st.secrets["GOOGLE_API_KEY"])
+                    
                     prompt = f"""
-                    Role: Business Consultant. Data for {sel_month}/{sel_year}:
-                    - Revenue: {rev}, Ops Exp: {total_actual_exp}, Owner Liabilities: {total_owner_fees}.
-                    - Active Cars: {len(df_cars[df_cars['Active']==True]) if not df_cars.empty else 0}
-                    Task: Arabic Executive Summary.
+                    Act as the CEO's Strategy Advisor.
+                    Report for: {sel_month}/{sel_year}
+                    
+                    Financials:
+                    - Revenue: {rev}
+                    - Net Profit: {net_profit} (Margin: {margin:.1f}%)
+                    - Owner Obligations: {total_owner_fees}
+                    
+                    Fleet:
+                    - Total Cars: {len(df_cars)}
+                    - Active: {len(active_cars)}
+                    
+                    Risks:
+                    - High Risk Expiries: {len(high) if 'high' in locals() else 0}
+                    
+                    Write a concise, bulleted Executive Summary in Arabic focusing on:
+                    1. Profitability Health.
+                    2. Cash Flow warnings (Owner payments).
+                    3. Critical Action Items (Renewals).
                     """
-                    advisor = Agent(role='Advisor', goal='Analysis', backstory='Expert', llm=llm)
-                    task = Task(description=prompt, agent=advisor, expected_output="Briefing")
+                    advisor = Agent(role='Advisor', goal='Report', backstory='Expert', llm=llm)
+                    task = Task(description=prompt, agent=advisor, expected_output="Summary")
                     crew = Crew(agents=[advisor], tasks=[task])
                     st.markdown(crew.kickoff())
-
-    with tab_diag:
-        st.subheader("🔧 Raw Data Check")
-        if not dfs['cars'].empty:
-            st.write("Processed Car Data:")
-            st.dataframe(df_cars.head(3))
