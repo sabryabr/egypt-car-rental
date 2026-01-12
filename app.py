@@ -56,6 +56,11 @@ def clean_money(x):
     match = re.search(r"[-+]?\d*\.\d+|\d+", s)
     return float(match.group()) if match else 0.0
 
+def clean_id(x):
+    """Normalizes IDs by removing spaces and special chars"""
+    if pd.isna(x): return ""
+    return str(x).strip().replace(" ", "")
+
 def format_egp(x):
     return f"{x:,.0f} EGP"
 
@@ -128,7 +133,7 @@ if dfs:
     sel_year = st.sidebar.selectbox("Year", [2024, 2025, 2026, 2027], index=2) 
     sel_month = st.sidebar.selectbox("Month", range(1, 13), index=0) 
 
-    # --- A. CARS ENGINE (UPDATED MAPPINGS) ---
+    # --- A. CARS ENGINE (Updated Mappings) ---
     df_cars_raw = dfs['cars']
     cars_clean = []
     
@@ -140,7 +145,7 @@ if dfs:
                 if idx < len(row): return row[idx]
                 return None
 
-            code = str(get('A') or '').strip()
+            code = clean_id(get('A')) # Normalized ID
             if not code or code in ['None', 'No.', 'كود']: continue 
 
             # Basic Info
@@ -149,7 +154,6 @@ if dfs:
             c_year = str(get('H') or '').strip()
             c_color = str(get('I') or '').strip()
             c_name = f"{c_type} {c_model} ({c_year}) - {c_color}"
-            
             plate = f"{get('AC') or ''} {get('AB') or ''} {get('AA') or ''} {get('Z') or ''} {get('Y') or ''} {get('X') or ''} {get('W') or ''}".strip()
             
             # Status
@@ -161,28 +165,25 @@ if dfs:
             # Dates
             lic_end = pd.to_datetime(get('AQ'), errors='coerce')
             checkup_date = pd.to_datetime(get('BD'), errors='coerce') 
-            contract_end = pd.to_datetime(get('BC'), errors='coerce') 
+            contract_end = pd.to_datetime(get('BC'), errors='coerce') # Fixed to BC
             
             # Insurance
             ins_end = pd.to_datetime(get('BJ'), errors='coerce') 
             has_ins = any(x in str(get('BN') or '') for x in ['Yes', 'نعم'])
             
-            # Payment Logic (CJ=Base, CK=Freq, CL=Deduct%, CM=Start)
+            # Payment Logic (CJ, CK, CL, CM)
             base_amt = clean_money(get('CJ')) 
             pay_freq = clean_money(get('CK')) 
             deduct_pct = clean_money(get('CL')) 
-            pay_start = pd.to_datetime(get('CM'), errors='coerce') 
+            pay_start = pd.to_datetime(get('CM'), errors='coerce') # Fixed to CM
             
-            # 1. Base Calc: (Base / 30) * Frequency
-            if pay_freq > 0:
-                final_amt = (base_amt / 30) * pay_freq
-            else:
-                final_amt = base_amt # Fallback if freq is 0 or missing
+            # 1. Base: (CJ / 30) * CK
+            freq = int(pay_freq) if pay_freq > 0 else 30 # Default 30 days
+            final_amt = (base_amt / 30) * freq
             
-            # 2. Deduction Calc: Only if CL has value > 0
+            # 2. Deduction
             if deduct_pct > 0:
                 final_amt = final_amt * (1 - (deduct_pct/100))
-            # Else: final_amt remains as is (No deduction)
             
             cars_clean.append({
                 'Code': code, 'Full_Name': c_name, 'Type': c_type, 'Model': c_model, 'Year': c_year, 
@@ -190,7 +191,7 @@ if dfs:
                 'License': lic_end, 'Checkup': checkup_date,
                 'Insurance': ins_end, 'Has_Ins': has_ins,
                 'Contract_End': contract_end, 
-                'Owner_Fee': final_amt, 'Pay_Freq': int(pay_freq) if pay_freq > 0 else 45, 'Pay_Start': pay_start
+                'Owner_Fee': final_amt, 'Pay_Freq': freq, 'Pay_Start': pay_start
             })
     
     df_cars = pd.DataFrame(cars_clean)
@@ -200,7 +201,7 @@ if dfs:
     orders_clean = []
     
     if not df_orders.empty:
-        # Detect split date columns
+        # Detect split columns
         cols = list(df_orders.columns)
         day_idxs = [i for i, c in enumerate(cols) if 'يوم' in str(c)]
         month_idxs = [i for i, c in enumerate(cols) if 'شهر' in str(c)]
@@ -231,26 +232,26 @@ if dfs:
                     end_date = datetime(e_year, e_month, e_day)
                 else: end_date = start_date + timedelta(days=1)
                     
-                car_code = str(row.iloc[car_col_idx]).strip()
+                car_code = clean_id(row.iloc[car_col_idx])
                 cost = clean_money(row.iloc[cost_col_idx]) if cost_col_idx else 0
                 orders_clean.append({'Start': start_date, 'End': end_date, 'Car_Code': car_code, 'Cost': cost})
             except: continue
     
     df_ord_clean = pd.DataFrame(orders_clean)
 
-    # --- C. UTILIZATION & FINANCIALS ---
+    # --- C. UTILIZATION ---
     start_m = datetime(sel_year, sel_month, 1)
     _, last_day = calendar.monthrange(sel_year, sel_month)
     end_m = datetime(sel_year, sel_month, last_day, 23, 59, 59)
     days_in_month = last_day
     
-    # Occupancy
     occupancy_data = []
     for _, car in df_cars.iterrows():
         if not car['Active']: continue
         rented_days = 0
         revenue = 0
         if not df_ord_clean.empty:
+            # Match Clean Code to Clean Code
             car_orders = df_ord_clean[df_ord_clean['Car_Code'] == car['Code']]
             for _, o in car_orders.iterrows():
                 latest_start = max(start_m, o['Start'])
@@ -269,7 +270,7 @@ if dfs:
     total_active = len(df_cars[df_cars['Active']])
     fleet_utilization = (df_occupancy['Rented_Days'].sum() / (total_active * days_in_month) * 100) if total_active > 0 else 0
 
-    # Owner Liabilities
+    # --- D. OWNER LIABILITIES ---
     owner_liabilities = []
     total_owner_fees = 0
     if not df_cars.empty:
@@ -277,18 +278,20 @@ if dfs:
             if not car['Active'] or pd.isna(car['Pay_Start']) or car['Owner_Fee'] == 0: continue
             curr = car['Pay_Start']
             end = car['Contract_End'] if pd.notnull(car['Contract_End']) else datetime(2035, 1, 1)
+            
             while curr <= end:
                 if curr.year == sel_year and curr.month == sel_month:
                     owner_liabilities.append({'Date': curr, 'Car': car['Full_Name'], 'Code': car['Code'], 'Plate': car['Plate'], 'Amount': car['Owner_Fee']})
                     total_owner_fees += car['Owner_Fee']
                 curr += timedelta(days=car['Pay_Freq'])
+    
     df_liab = pd.DataFrame(owner_liabilities)
     if not df_liab.empty:
         df_liab = df_liab.sort_values('Date')
         df_liab['Formatted Date'] = df_liab['Date'].apply(format_date)
         df_liab['Formatted Amount'] = df_liab['Amount'].apply(format_egp)
 
-    # Monthly Financials
+    # --- E. FINANCIALS ---
     def safe_sum(df, key):
         c = next((c for c in df.columns if key in str(c)), None)
         return df[c].apply(clean_money).sum() if c else 0
@@ -369,7 +372,6 @@ if dfs:
                 st.plotly_chart(fig, use_container_width=True)
                 
                 st.subheader("Active Fleet (Sorted by Contract End)")
-                # Sort Active by Contract End (Closest first)
                 active_sorted = active_cars.sort_values('Contract_End', ascending=True)
                 disp = active_sorted[['Code', 'Full_Name', 'Plate', 'Contract_End']].copy()
                 disp['Contract_End'] = disp['Contract_End'].apply(format_date)
@@ -378,7 +380,6 @@ if dfs:
         with c2:
             st.subheader("Inactive Fleet (Latest Contracts)")
             if not inactive_cars.empty:
-                # Sort Inactive by Latest Contract End (Descending)
                 inactive_sorted = inactive_cars.sort_values('Contract_End', ascending=False)
                 disp_in = inactive_sorted[['Code', 'Full_Name', 'Contract_End']].copy()
                 disp_in['Contract_End'] = disp_in['Contract_End'].apply(format_date)
@@ -408,7 +409,7 @@ if dfs:
                 gauge={'axis': {'range': [-20, 100]}, 'bar': {'color': "green" if margin > 15 else "orange"}}))
             st.plotly_chart(fig, use_container_width=True)
 
-    # TAB 4: RISKS (UPDATED LOGIC)
+    # TAB 4: RISKS
     with tabs[3]:
         st.subheader("🚨 Expiry Risk Management")
         today = datetime.today()
@@ -422,19 +423,16 @@ if dfs:
             lic_date = car['License']
             check_date = car['Checkup']
             risk_type = "License"
-            
             if pd.notnull(lic_date):
-                # Check for Examination match
                 if pd.notnull(check_date) and abs((lic_date - check_date).days) < 2:
                     risk_type = "License + Exam"
-                
                 r = None
                 if today < lic_date <= limits['High']: r = "High"
                 elif limits['High'] < lic_date <= limits['Med']: r = "Med"
                 elif limits['Med'] < lic_date <= limits['Low']: r = "Low"
                 if r: risks.append({'Car': car['Full_Name'], 'Code': car['Code'], 'Plate': car['Plate'], 'Type': risk_type, 'Date': format_date(lic_date), 'Risk': r})
 
-            # Insurance (Only if Has_Ins is True)
+            # Insurance
             if car['Has_Ins'] and pd.notnull(car['Insurance']):
                 r = None
                 ins_date = car['Insurance']
@@ -481,10 +479,11 @@ if dfs:
         if st.button("Generate Strategy"):
             if 'GOOGLE_API_KEY' not in st.secrets: st.error("Missing Key")
             else:
-                os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-                llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=st.secrets["GOOGLE_API_KEY"])
-                prompt = f"Advisor Report: {sel_month}/{sel_year}. Rev: {rev}, Profit: {net_profit}, Util: {fleet_utilization:.1f}%. Arabic Brief."
-                advisor = Agent(role='Advisor', goal='Report', backstory='Expert', llm=llm)
-                task = Task(description=prompt, agent=advisor, expected_output="Summary")
-                crew = Crew(agents=[advisor], tasks=[task])
-                st.markdown(crew.kickoff())
+                with st.spinner("Analyzing..."):
+                    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+                    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=st.secrets["GOOGLE_API_KEY"])
+                    prompt = f"Advisor Report: {sel_month}/{sel_year}. Rev: {rev}, Profit: {net_profit}, Util: {fleet_utilization:.1f}%. Arabic Brief."
+                    advisor = Agent(role='Advisor', goal='Report', backstory='Expert', llm=llm)
+                    task = Task(description=prompt, agent=advisor, expected_output="Summary")
+                    crew = Crew(agents=[advisor], tasks=[task])
+                    st.markdown(crew.kickoff())
