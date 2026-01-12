@@ -19,7 +19,7 @@ st.markdown("""
     .main { direction: rtl; text-align: right; }
     h1, h2, h3, p, div { font-family: 'Cairo', sans-serif; }
     
-    /* Executive Metrics */
+    /* Metrics */
     .stMetric { 
         background-color: #ffffff !important; 
         border-radius: 15px; 
@@ -28,8 +28,8 @@ st.markdown("""
         box-shadow: 0 4px 15px rgba(0,0,0,0.05);
         text-align: center;
     }
-    [data-testid="stMetricLabel"] { color: #888 !important; font-size: 1rem; }
-    [data-testid="stMetricValue"] { color: #2c3e50 !important; font-weight: 800; font-size: 2rem; }
+    [data-testid="stMetricLabel"] { color: #888 !important; font-size: 1.1rem; font-weight: bold; }
+    [data-testid="stMetricValue"] { color: #2c3e50 !important; font-weight: 900; font-size: 2.2rem; }
     
     /* Tables */
     .stDataFrame { direction: ltr; }
@@ -82,6 +82,7 @@ def load_data():
             
             if len(vals) > header_row:
                 raw_headers = vals[header_row]
+                # Fix Duplicates
                 headers = []
                 seen = {}
                 for h in raw_headers:
@@ -147,7 +148,7 @@ if dfs:
             c_type = str(get('B') or '').strip()
             c_model = str(get('E') or '').strip()
             c_year = str(get('H') or '').strip()
-            c_color = str(get('I') or '').strip() # <--- UPDATED
+            c_color = str(get('I') or '').strip() 
             c_seats = str(get('O') or '').strip()
             
             c_name = f"{c_type} {c_model} ({c_year}) - {c_color}"
@@ -162,7 +163,7 @@ if dfs:
             
             # Dates
             lic_end = pd.to_datetime(get('AQ'), errors='coerce')
-            ins_end = pd.to_datetime(get('BK'), errors='coerce') # Insurance
+            ins_end = pd.to_datetime(get('BK'), errors='coerce')
             contract_end = pd.to_datetime(get('AX'), errors='coerce')
             
             # Payments
@@ -249,7 +250,7 @@ if dfs:
     net_profit = rev - total_exp
     margin = (net_profit / rev * 100) if rev > 0 else 0
 
-    # Trend Data (Full Year)
+    # Trend Data (FIXED KEYERROR HERE)
     df_trend_rev = filter_df(dfs['coll'], sel_year)
     df_trend_exp = filter_df(dfs['gen'], sel_year)
     
@@ -276,20 +277,19 @@ if dfs:
         with c1:
             st.subheader("Fleet Segregation (Type > Model)")
             if not active_cars.empty:
-                # Sunburst Chart: Type -> Model
                 fig_sun = px.sunburst(active_cars, path=['Type', 'Model'], title="Active Fleet Breakdown")
+                fig_sun.update_layout(height=500, font=dict(size=14, family="Arial Black"))
                 st.plotly_chart(fig_sun, use_container_width=True)
             else:
                 st.info("No active cars.")
 
             st.subheader("Active Fleet (Sorted by Contract End)")
             if not active_cars.empty:
-                # Sort: Closer Date First (Ascending)
                 active_sorted = active_cars.sort_values('Contract_End', ascending=True)
-                
                 disp = active_sorted[['Code', 'Full_Name', 'Plate', 'KM', 'Contract_End']].copy()
                 disp['Contract_End'] = disp['Contract_End'].apply(format_date)
-                st.dataframe(disp, use_container_width=True)
+                # HIDDEN INDEX
+                st.dataframe(disp, use_container_width=True, hide_index=True)
 
         with c2:
             st.subheader("Fleet by Year Model")
@@ -297,6 +297,7 @@ if dfs:
                 grp_year = active_cars['Year'].value_counts().reset_index()
                 grp_year.columns = ['Year', 'Count']
                 fig_year = px.bar(grp_year, x='Year', y='Count')
+                fig_year.update_layout(height=500, font=dict(size=14, family="Arial Black"))
                 st.plotly_chart(fig_year, use_container_width=True)
             
             st.metric("Total Fleet Size", len(df_cars))
@@ -307,19 +308,44 @@ if dfs:
         c1, c2 = st.columns([2, 1])
         with c1:
             st.subheader("Monthly Financial Trend")
-            # Build Trend Data
+            
+            # --- FIXED TREND LOGIC (DYNAMIC COLUMN FINDING) ---
             trend_data = []
             for m in range(1, 13):
-                r = filter_df(dfs['coll'], sel_year, m)['قيمة التحصيل'].apply(clean_money).sum()
-                e = filter_df(dfs['gen'], sel_year, m)['قيمة المصروف'].apply(clean_money).sum() + \
-                    filter_df(dfs['car_exp'], sel_year, m)['قيمة المصروف'].apply(clean_money).sum()
-                trend_data.append({'Month': m, 'Revenue': r, 'Expenses': e})
+                # Revenue
+                r_df = filter_df(dfs['coll'], sel_year, m)
+                r_col = next((c for c in r_df.columns if 'قيمة' in c), None)
+                r_val = r_df[r_col].apply(clean_money).sum() if r_col else 0
+                
+                # General Expenses
+                g_df = filter_df(dfs['gen'], sel_year, m)
+                g_col = next((c for c in g_df.columns if 'قيمة' in c), None)
+                g_val = g_df[g_col].apply(clean_money).sum() if g_col else 0
+                
+                # Car Expenses
+                c_df = filter_df(dfs['car_exp'], sel_year, m)
+                c_col = next((c for c in c_df.columns if 'قيمة' in c), None)
+                c_val = c_df[c_col].apply(clean_money).sum() if c_col else 0
+                
+                trend_data.append({'Month': m, 'Revenue': r_val, 'Expenses': g_val + c_val})
             
             df_trend = pd.DataFrame(trend_data)
+            
             fig_trend = go.Figure()
-            fig_trend.add_trace(go.Scatter(x=df_trend['Month'], y=df_trend['Revenue'], mode='lines+markers', name='Revenue', line=dict(color='green')))
-            fig_trend.add_trace(go.Scatter(x=df_trend['Month'], y=df_trend['Expenses'], mode='lines+markers', name='Expenses', line=dict(color='red')))
+            fig_trend.add_trace(go.Scatter(x=df_trend['Month'], y=df_trend['Revenue'], mode='lines+markers', name='Revenue', line=dict(color='green', width=4)))
+            fig_trend.add_trace(go.Scatter(x=df_trend['Month'], y=df_trend['Expenses'], mode='lines+markers', name='Expenses', line=dict(color='red', width=4)))
+            fig_trend.update_layout(height=500, font=dict(size=14, family="Arial Black"), title="Revenue vs Expenses (Annual Trend)")
             st.plotly_chart(fig_trend, use_container_width=True)
+
+            # Profit Waterfall
+            fig_waterfall = go.Figure(go.Waterfall(
+                measure = ["relative", "relative", "relative", "relative", "total"],
+                x = ["Revenue", "Owner Fees", "Car Maint", "Ops Expenses", "Net Profit"],
+                y = [rev, -total_owner_fees, -exp_maint, -exp_ops, net_profit],
+                connector = {"line":{"color":"rgb(63, 63, 63)"}},
+            ))
+            fig_waterfall.update_layout(title = "Profit Waterfall (This Month)", height=500, font=dict(size=14, family="Arial Black"))
+            st.plotly_chart(fig_waterfall, use_container_width=True)
 
         with c2:
             st.subheader("Profitability Gauge")
@@ -329,6 +355,7 @@ if dfs:
                 title = {'text': "Net Margin %"},
                 gauge = {'axis': {'range': [-20, 100]}, 'bar': {'color': "green" if margin > 15 else "orange"}}
             ))
+            fig_gauge.update_layout(height=400, font=dict(size=16, family="Arial Black"))
             st.plotly_chart(fig_gauge, use_container_width=True)
 
     # --- TAB 3: RISKS ---
@@ -365,62 +392,78 @@ if dfs:
         if risks:
             df_risk = pd.DataFrame(risks)
             df_risk['Date'] = df_risk['Date'].apply(format_date)
+            df_risk = df_risk.sort_values('Date')
             
             c1, c2, c3 = st.columns(3)
-            
             with c1:
                 high = df_risk[df_risk['Risk'] == 'High']
                 st.markdown(f"<div class='risk-high'>🔴 High Risk ({len(high)})</div>", unsafe_allow_html=True)
-                st.table(high[['Car', 'Type', 'Date']])
-            
+                st.dataframe(high[['Car', 'Type', 'Date']], hide_index=True)
             with c2:
                 med = df_risk[df_risk['Risk'] == 'Med']
                 st.markdown(f"<div class='risk-med'>🟠 Medium Risk ({len(med)})</div>", unsafe_allow_html=True)
-                st.table(med[['Car', 'Type', 'Date']])
-            
+                st.dataframe(med[['Car', 'Type', 'Date']], hide_index=True)
             with c3:
                 low = df_risk[df_risk['Risk'] == 'Low']
                 st.markdown(f"<div class='risk-low'>🟢 Low Risk ({len(low)})</div>", unsafe_allow_html=True)
-                st.table(low[['Car', 'Type', 'Date']])
+                st.dataframe(low[['Car', 'Type', 'Date']], hide_index=True)
         else:
             st.success("✅ No risks found in the next 12 months.")
 
     # --- TAB 4: OWNER PAYMENTS ---
     with tabs[3]:
-        st.subheader("Schedule of Payments")
+        st.subheader(f"Owner Obligations: {sel_month}/{sel_year}")
         if not df_liab.empty:
-            st.dataframe(df_liab, use_container_width=True)
+            st.dataframe(
+                df_liab[['Date', 'Car', 'Amount', 'Status']],
+                use_container_width=True,
+                hide_index=True
+            )
+            st.metric("Total Payable", format_egp(total_owner_fees))
         else:
-            st.info("No payments due.")
+            st.success("No payments due this month.")
 
     # --- TAB 5: ALL CARS ---
     with tabs[4]:
         st.subheader("📋 Full Fleet Database")
-        # Full view
         disp_full = df_cars.copy()
         for c in ['License', 'Insurance', 'Contract_End', 'Pay_Start']:
             disp_full[c] = disp_full[c].apply(format_date)
         disp_full['Owner_Fee'] = disp_full['Owner_Fee'].apply(format_egp)
         
-        st.dataframe(disp_full, use_container_width=True)
+        st.dataframe(disp_full, use_container_width=True, hide_index=True)
 
     # --- TAB 6: AI ---
     with tabs[5]:
-        if st.button("Generate Strategy Report"):
+        if st.button("Generate Executive Briefing"):
             if 'GOOGLE_API_KEY' not in st.secrets:
                 st.error("Missing API Key")
             else:
-                with st.spinner("Analyzing..."):
+                with st.spinner("AI is analyzing all tabs..."):
                     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
                     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=st.secrets["GOOGLE_API_KEY"])
                     prompt = f"""
-                    Role: CEO Advisor. Data: {sel_month}/{sel_year}
-                    Rev: {rev}, Profit: {net_profit}, Owner Fees: {total_owner_fees}.
-                    Fleet: {len(active_cars)} Active.
-                    Risks: {len(df_risk) if 'df_risk' in locals() else 0} Expiries.
-                    Task: Arabic Strategy Brief.
+                    Role: CEO Strategy Advisor. 
+                    Report for: {sel_month}/{sel_year}
+                    
+                    Financials:
+                    - Revenue: {rev}
+                    - Net Profit: {net_profit} (Margin: {margin:.1f}%)
+                    - Owner Obligations: {total_owner_fees}
+                    
+                    Fleet:
+                    - Total Cars: {len(df_cars)}
+                    - Active: {len(active_cars)}
+                    
+                    Risks:
+                    - Expiries: {len(df_risk) if 'df_risk' in locals() else 0}
+                    
+                    Task: Write a concise, bulleted Executive Summary in Arabic focusing on:
+                    1. Profitability Health.
+                    2. Cash Flow warnings (Owner payments).
+                    3. Critical Action Items (Renewals).
                     """
                     advisor = Agent(role='Advisor', goal='Report', backstory='Expert', llm=llm)
-                    task = Task(description=prompt, agent=advisor, expected_output="Briefing")
+                    task = Task(description=prompt, agent=advisor, expected_output="Summary")
                     crew = Crew(agents=[advisor], tasks=[task])
                     st.markdown(crew.kickoff())
