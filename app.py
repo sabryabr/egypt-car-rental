@@ -6,6 +6,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import os
 import string
+import re
 from datetime import datetime, timedelta
 
 # --- 1. APP CONFIGURATION ---
@@ -14,18 +15,26 @@ st.set_page_config(page_title="Egypt Rental OS 3.0", layout="wide", page_icon="�
 # --- 2. CUSTOM CSS ---
 st.markdown("""
 <style>
-    .main { direction: rtl; font-family: 'Cairo', sans-serif; background-color: #f8f9fa; }
-    [data-testid="stSidebar"] { background-color: #2c3e50; color: white; }
-    .metric-card {
-        background-color: white; border: 1px solid #e0e0e0; 
-        border-radius: 12px; padding: 20px; text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    .main { direction: rtl; font-family: 'Cairo', sans-serif; background-color: #0e1117; color: white; }
+    [data-testid="stSidebar"] { background-color: #1e2530; color: white; }
+    
+    /* Metrics */
+    div[data-testid="metric-container"] {
+        background-color: #262730;
+        border: 1px solid #464b5d;
+        border-radius: 10px;
+        padding: 15px;
+        color: white;
     }
-    .stMetric { background-color: white; border-radius: 10px; padding: 10px; border: 1px solid #eee; }
+    label[data-testid="stMetricLabel"] { color: #b0b3b8 !important; }
+    div[data-testid="stMetricValue"] { color: #ffffff !important; }
+    
+    /* Tables */
+    .stDataFrame { direction: ltr; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. DATA ENGINE (Your Updated Loader) ---
+# --- 3. DATA ENGINE (FIXED & BULLETPROOF) ---
 @st.cache_data(ttl=300)
 def load_data_v3():
     if "gcp_service_account" not in st.secrets:
@@ -46,23 +55,35 @@ def load_data_v3():
             if len(vals) > header_row:
                 headers = vals[header_row]
                 data = vals[header_row+1:]
+                
+                # 1. Sanitize Headers
                 clean_headers = []
                 seen = {}
-                for h in headers:
-                    h = str(h).strip()
-                    if h in seen:
-                        seen[h] += 1
-                        clean_headers.append(f"{h}_{seen[h]}")
+                for i, h in enumerate(headers):
+                    h_str = str(h).strip()
+                    if not h_str: h_str = f"Col_{i}" # Name empty columns
+                    if h_str in seen:
+                        seen[h_str] += 1
+                        clean_headers.append(f"{h_str}_{seen[h_str]}")
                     else:
-                        seen[h] = 0
-                        clean_headers.append(h)
+                        seen[h_str] = 0
+                        clean_headers.append(h_str)
                 
-                max_len = len(clean_headers)
-                padded_data = [row + [None]*(max_len-len(row)) for row in data]
-                return pd.DataFrame(padded_data, columns=clean_headers)
+                # 2. Strict Row Enforcement (The Fix)
+                target_len = len(clean_headers)
+                clean_data = []
+                for row in data:
+                    # Truncate if too long (fix "30 columns passed" error)
+                    row_fixed = row[:target_len] 
+                    # Pad if too short
+                    if len(row_fixed) < target_len:
+                        row_fixed += [None] * (target_len - len(row_fixed))
+                    clean_data.append(row_fixed)
+                
+                return pd.DataFrame(clean_data, columns=clean_headers)
             return pd.DataFrame()
         except Exception as e:
-            st.warning(f"⚠️ Load Error ({range_name}): {str(e)}")
+            st.error(f"⚠️ Data Load Error in '{range_name}': {str(e)}")
             return pd.DataFrame()
 
     IDS = {
@@ -76,9 +97,9 @@ def load_data_v3():
 
     with st.spinner("🔄 Syncing HQ Data..."):
         dfs = {}
-        # Fetching A:ZZ to get all columns
+        # Fetching specific ranges to minimize junk data
         dfs['cars'] = fetch_sheet(IDS['cars'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
-        dfs['orders'] = fetch_sheet(IDS['orders'], "'صفحة الإدخالات للإيجارات'!A:ZZ", 1) # Headers on Row 2
+        dfs['orders'] = fetch_sheet(IDS['orders'], "'صفحة الإدخالات للإيجارات'!A:ZZ", 1)
         dfs['clients'] = fetch_sheet(IDS['clients'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
         return dfs
 
@@ -95,8 +116,11 @@ def get_col_by_letter(df, letter):
     return None
 
 def clean_id_tag(x):
-    if pd.isna(x): return ""
-    return str(x).strip().replace(" ", "").lower()
+    """Normalize ID for matching"""
+    if pd.isna(x): return "unknown"
+    # Remove spaces, specific arabic chars if needed, lower case
+    val = str(x).strip().replace(" ", "").lower()
+    return val
 
 # --- 4. NAVIGATION & INIT ---
 st.sidebar.title("🚘 Rental OS 3.0")
@@ -113,26 +137,39 @@ def show_operations(dfs):
         df_orders = dfs['orders']
         df_cars = dfs['cars']
         
-        # --- A. PROCESS DATA ---
-        # 1. Active Fleet Count (Column AZ in Cars)
-        col_status = get_col_by_letter(df_cars, 'AZ')
+        # --- A. PROCESS CARS (Build Map) ---
+        car_map = {} # Code -> Label
         active_fleet_count = 0
-        car_map = {} # Code -> Name
         
-        if col_status:
+        # Identify columns
+        col_code = get_col_by_letter(df_cars, 'A')
+        col_type = get_col_by_letter(df_cars, 'B')
+        col_model = get_col_by_letter(df_cars, 'E')
+        col_year = get_col_by_letter(df_cars, 'H')
+        col_plate = get_col_by_letter(df_cars, 'AC') # Start of plate
+        col_status = get_col_by_letter(df_cars, 'AZ')
+
+        if col_code and col_status:
+            # Filter Valid Cars
             active_cars = df_cars[df_cars[col_status].astype(str).str.contains('Valid|ساري', case=False, na=False)]
             active_fleet_count = len(active_cars)
-            
-            # Build Car Map: Code (A) -> Name (B+E+H+I) / Plate (AC..W)
-            for _, row in active_cars.iterrows():
+
+            for _, row in df_cars.iterrows(): # Map ALL cars, not just active, for history
                 try:
-                    c_code = clean_id_tag(row.iloc[0]) # Col A
-                    c_name = f"{row.iloc[1]} {row.iloc[4]} ({row.iloc[7]})" # B, E, H
-                    c_plate = f"{row.iloc[28]} {row.iloc[27]} {row.iloc[26]}".strip() # AC, AB, AA (Partial plate)
-                    car_map[c_code] = f"{c_name} | {c_plate}"
+                    c_id = clean_id_tag(row[col_code])
+                    c_label = f"{row[col_type]} {row[col_model]} ({row[col_year]})"
+                    # Try to get plate parts if they exist
+                    plate = ""
+                    # Combine plate parts roughly (AC to W)
+                    for p_col in ['AC','AB','AA','Z','Y','X','W']:
+                        c_p = get_col_by_letter(df_cars, p_col)
+                        if c_p and pd.notnull(row[c_p]):
+                            plate += str(row[c_p]) + " "
+                    
+                    car_map[c_id] = f"{c_label} | {plate.strip()}"
                 except: continue
 
-        # 2. Process Orders (Start: L, End: V)
+        # --- B. PROCESS ORDERS ---
         today = datetime.now()
         active_rentals = 0
         returning_today = 0
@@ -141,77 +178,70 @@ def show_operations(dfs):
         
         col_start = get_col_by_letter(df_orders, 'L')
         col_end = get_col_by_letter(df_orders, 'V')
-        col_car = get_col_by_letter(df_orders, 'C')
+        col_car_ord = get_col_by_letter(df_orders, 'C')
         col_client = get_col_by_letter(df_orders, 'B')
         
-        if col_start and col_end:
+        if col_start and col_end and col_car_ord:
             for _, row in df_orders.iterrows():
                 try:
-                    # Parse Dates
                     s_date = pd.to_datetime(row[col_start], errors='coerce')
                     e_date = pd.to_datetime(row[col_end], errors='coerce')
                     
                     if pd.isna(s_date) or pd.isna(e_date): continue
                     
-                    # Live Metrics Logic
+                    # Clean ID to match map
+                    raw_car_id = row[col_car_ord]
+                    car_id_clean = clean_id_tag(raw_car_id)
+                    car_name = car_map.get(car_id_clean, f"Unknown ID ({raw_car_id})")
+
+                    # Metrics
                     if s_date <= today <= e_date: active_rentals += 1
                     if e_date.date() == today.date(): returning_today += 1
                     if s_date.date() == today.date(): departing_today += 1
                     
-                    # Timeline Data
-                    car_code = clean_id_tag(row[col_car])
-                    car_label = car_map.get(car_code, f"Unknown ({car_code})")
-                    
                     timeline_data.append({
-                        'Car': car_label,
+                        'Car': car_name,
                         'Start': s_date,
                         'End': e_date,
-                        'Client': str(row[col_client]),
+                        'Client': str(row[col_client]) if col_client else "N/A",
                         'Status': 'Active' if s_date <= today <= e_date else 'Scheduled'
                     })
                 except: continue
 
-        fleet_utilization = int((active_rentals / active_fleet_count * 100)) if active_fleet_count > 0 else 0
+        utilization = int((active_rentals / active_fleet_count * 100)) if active_fleet_count > 0 else 0
 
-        # --- B. UI VISUALS ---
-        # 1. Metrics Row
+        # --- C. UI ---
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("🚗 Active Rentals", active_rentals, delta="Live on Road")
+        c1.metric("🚗 Active Rentals", active_rentals, "Live")
         c2.metric("🔄 Returning Today", returning_today, delta_color="inverse")
         c3.metric("🛫 Departing Today", departing_today)
-        c4.metric("📊 Fleet Utilization", f"{fleet_utilization}%", f"{active_fleet_count} Total Cars")
+        c4.metric("📊 Utilization", f"{utilization}%", f"{active_fleet_count} Active Cars")
         
         st.divider()
-        
-        # 2. The Huge Calendar
         st.subheader("📅 Live Fleet Schedule")
+        
         if timeline_data:
             df_timeline = pd.DataFrame(timeline_data)
-            
-            # Gantt Chart
+            # Filter for logical dates (e.g. 2023 onwards) to avoid clutter
+            df_timeline = df_timeline[df_timeline['Start'] > '2023-01-01']
+
             fig = px.timeline(
                 df_timeline, 
-                x_start="Start", 
-                x_end="End", 
-                y="Car", 
-                color="Status",
-                hover_data=["Client"],
-                color_discrete_map={"Active": "#2ecc71", "Scheduled": "#3498db"}
+                x_start="Start", x_end="End", y="Car", color="Status",
+                color_discrete_map={"Active": "#00C853", "Scheduled": "#2962FF"},
+                hover_data=["Client"]
             )
-            fig.update_yaxes(autorange="reversed") # Cars top to bottom
+            fig.update_yaxes(autorange="reversed")
             fig.update_layout(
                 height=600, 
-                xaxis_title="Date",
-                font=dict(size=14),
-                margin=dict(l=10, r=10, t=30, b=10)
+                plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
+                font=dict(color="white"),
+                xaxis=dict(showgrid=True, gridcolor="#333"),
             )
-            
-            # Highlight Today
-            fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="red")
-            
+            fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No active bookings found in the system.")
+            st.warning("No valid booking dates found. Check 'L' and 'V' columns in Orders sheet.")
 
 # --- 6. PAGE ROUTER ---
 if page == "🏠 Operations": show_operations(dfs)
