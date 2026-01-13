@@ -115,3 +115,99 @@ elif page == "🚗 Vehicle 360 (السيارات)": show_vehicle_360()
 elif page == "👥 CRM (العملاء)": show_crm()
 elif page == "💰 Financial HQ (المالية)": show_financial_hq()
 elif page == "⚠️ Risk Radar (المخاطر)": show_risk_radar()
+
+# --- 6. DATA ENGINE (The Heart of OS 3.0) ---
+@st.cache_data(ttl=300) # Auto-refresh every 5 mins
+def load_data_v3():
+    if "gcp_service_account" not in st.secrets:
+        st.error("⚠️ Secrets Missing: Please add Google Credentials.")
+        return None
+
+    # Connect to Google Sheets
+    creds = service_account.Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
+    )
+    service = build('sheets', 'v4', credentials=creds)
+
+    def fetch_sheet(sheet_id, range_name, header_row=0):
+        try:
+            result = service.spreadsheets().values().get(spreadsheetId=sheet_id, range=range_name).execute()
+            vals = result.get('values', [])
+            if not vals: return pd.DataFrame()
+            
+            # Handle headers
+            if len(vals) > header_row:
+                headers = vals[header_row]
+                data = vals[header_row+1:]
+                
+                # Deduplicate headers
+                seen = {}
+                clean_headers = []
+                for h in headers:
+                    h = str(h).strip()
+                    if h in seen:
+                        seen[h] += 1
+                        clean_headers.append(f"{h}_{seen[h]}")
+                    else:
+                        seen[h] = 0
+                        clean_headers.append(h)
+                
+                # Pad rows to match header length
+                max_len = len(clean_headers)
+                padded_data = [row + [None]*(max_len-len(row)) for row in data]
+                
+                return pd.DataFrame(padded_data, columns=clean_headers)
+            return pd.DataFrame()
+        except Exception as e:
+            st.warning(f"⚠️ Load Error ({range_name}): {str(e)}")
+            return pd.DataFrame()
+
+    # --- SHEET IDs (Your Provided IDs) ---
+    IDS = {
+        'cars': "1fLr5mwDoRQ1P5g-t4uZ8mSY04xHiCSSisSWDbatx9dg",
+        'orders': "16mLWxdxpV6DDaGfeLf-t1XDx25H4rVEbtx_hE88nF7A",
+        'clients': "1izZeNVITKEKVCT4KUnb71uFO8pzCdpUs8t8FetAxbEg",
+        'expenses': "1hZoymf0CN1wOssc3ddQiZXxbJTdzJZBnamp_aCobl1Q",
+        'car_expenses': "1vDKKOywOEGfmLcHr4xk7KMTChHJ0_qquNopXpD81XVE",
+        'collections': "1jtp-ihtAOt9NNHETZ5muiL5OA9yW3WrpBIIDAf5UAyg"
+    }
+
+    # --- FETCH DATA ---
+    with st.spinner("🔄 Syncing with HQ..."):
+        dfs = {}
+        # Fetching specific ranges to ensure we get all columns (A:ZZ)
+        dfs['cars'] = fetch_sheet(IDS['cars'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+        dfs['orders'] = fetch_sheet(IDS['orders'], "'صفحة الإدخالات للإيجارات'!A:ZZ", 1) # Headers on Row 2 (Index 1)
+        dfs['clients'] = fetch_sheet(IDS['clients'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+        dfs['expenses'] = fetch_sheet(IDS['expenses'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+        dfs['car_expenses'] = fetch_sheet(IDS['car_expenses'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+        dfs['collections'] = fetch_sheet(IDS['collections'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+
+    return dfs
+
+# --- HELPER: Column Index Finder ---
+def get_col_by_letter(df, letter):
+    """Converts Excel Letter (e.g. 'AE') to DataFrame Column Name"""
+    def letter_to_index(col_str):
+        num = 0
+        for c in col_str:
+            if c.upper() in string.ascii_uppercase:
+                num = num * 26 + (ord(c.upper()) - ord('A')) + 1
+        return num - 1
+    
+    idx = letter_to_index(letter)
+    if idx < len(df.columns):
+        return df.columns[idx]
+    return None
+
+# --- HELPER: Advanced Cleaner ---
+def clean_currency(x):
+    if pd.isna(x): return 0.0
+    s = str(x).replace(',', '').replace('%', '').strip()
+    match = re.search(r"[-+]?\d*\.\d+|\d+", s)
+    return float(match.group()) if match else 0.0
+
+def clean_id_tag(x):
+    """Standardizes IDs for matching (removes spaces, lowercase)"""
+    if pd.isna(x): return ""
+    return str(x).strip().replace(" ", "").lower()
