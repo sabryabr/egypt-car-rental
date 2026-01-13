@@ -243,9 +243,176 @@ def show_operations(dfs):
         else:
             st.warning("No valid booking dates found. Check 'L' and 'V' columns in Orders sheet.")
 
+# --- 5. MODULE 2: VEHICLE 360 ---
+def show_vehicle_360(dfs):
+    st.title("🚗 Vehicle 360° Profile")
+    
+    if not dfs: return
+
+    df_cars = dfs['cars']
+    df_orders = dfs['orders']
+    df_car_exp = dfs['car_expenses']
+
+    # --- A. SIDEBAR CONTROLS ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("🔍 Vehicle Filter")
+    
+    # Build Car List
+    car_options = {}
+    col_code = get_col_by_letter(df_cars, 'A')
+    col_name_parts = ['B', 'E', 'H', 'I'] # Type, Model, Year, Color
+    
+    if col_code:
+        for _, row in df_cars.iterrows():
+            try:
+                c_id = clean_id_tag(row[col_code])
+                c_label = " ".join([str(row[get_col_by_letter(df_cars, c)]) for c in col_name_parts if pd.notnull(row[get_col_by_letter(df_cars, c)])])
+                car_options[c_label + f" ({c_id})"] = c_id
+            except: continue
+
+    selected_car_label = st.sidebar.selectbox("Select Vehicle", list(car_options.keys()))
+    selected_car_id = car_options[selected_car_label]
+
+    # Date Filter for P&L
+    sel_year = st.sidebar.selectbox("Analysis Year", [2024, 2025, 2026], index=2)
+    sel_month = st.sidebar.selectbox("Analysis Month", range(1, 13), index=0)
+
+    # --- B. GET CAR DETAILS ---
+    car_row = df_cars[df_cars[col_code].astype(str).str.strip().str.replace(" ", "").str.lower() == selected_car_id].iloc[0]
+    
+    # Basic Info
+    plate = ""
+    for p in ['AC','AB','AA','Z','Y','X','W']:
+        val = car_row[get_col_by_letter(df_cars, p)]
+        if pd.notnull(val): plate += str(val) + " "
+    
+    owner_name = f"{car_row[get_col_by_letter(df_cars, 'BP')]} {car_row[get_col_by_letter(df_cars, 'BQ')]}"
+    contract_end = car_row[get_col_by_letter(df_cars, 'BC')]
+    
+    # Financial Config
+    base_fee = clean_currency(car_row[get_col_by_letter(df_cars, 'CJ')])
+    deduct_pct = clean_currency(car_row[get_col_by_letter(df_cars, 'CL')])
+    
+    # --- C. CALCULATE FINANCIALS (Month Specific) ---
+    # 1. Revenue (Orders)
+    month_revenue = 0.0
+    trip_count = 0
+    col_ord_start = get_col_by_letter(df_orders, 'L')
+    col_ord_cost = get_col_by_letter(df_orders, 'AE')
+    col_ord_car = get_col_by_letter(df_orders, 'C')
+
+    if col_ord_start:
+        # Filter orders for this car AND this month
+        for _, row in df_orders.iterrows():
+            if clean_id_tag(row[col_ord_car]) == selected_car_id:
+                d = pd.to_datetime(row[col_ord_start], errors='coerce')
+                if pd.notnull(d) and d.year == sel_year and d.month == sel_month:
+                    month_revenue += clean_currency(row[col_ord_cost])
+                    trip_count += 1
+
+    # 2. Direct Expenses (Maintenance)
+    month_expenses = 0.0
+    col_exp_car = get_col_by_letter(df_car_exp, 'S')
+    col_exp_amt = get_col_by_letter(df_car_exp, 'Z')
+    col_exp_m = get_col_by_letter(df_car_exp, 'X') # Month
+    col_exp_y = get_col_by_letter(df_car_exp, 'Y') # Year
+
+    if col_exp_car:
+        for _, row in df_car_exp.iterrows():
+            if clean_id_tag(row[col_exp_car]) == selected_car_id:
+                try:
+                    if int(clean_currency(row[col_exp_y])) == sel_year and int(clean_currency(row[col_exp_m])) == sel_month:
+                        month_expenses += clean_currency(row[col_exp_amt])
+                except: continue
+
+    # 3. Estimated Owner Cost (Pro-rated for 1 month)
+    # Logic: Base Fee is usually monthly. If Deduction exists, apply it.
+    est_owner_cost = base_fee * (1 - (deduct_pct/100))
+    
+    net_profit = month_revenue - month_expenses - est_owner_cost
+
+    # --- D. VISUAL LAYOUT ---
+    
+    # Header Card
+    with st.container():
+        c1, c2, c3 = st.columns([1, 3, 2])
+        with c1:
+            st.image("https://cdn-icons-png.flaticon.com/512/3202/3202926.png", width=100)
+        with c2:
+            st.subheader(f"{selected_car_label}")
+            st.caption(f"Plate: {plate} | Owner: {owner_name}")
+            st.caption(f"Contract Ends: {contract_end}")
+        with c3:
+            st.metric("Net Profit (Est.)", f"{net_profit:,.0f} EGP", 
+                     delta=f"Rev: {month_revenue:,.0f} | Exp: {month_expenses:,.0f}")
+
+    st.divider()
+
+    # Tabs
+    tab1, tab2, tab3 = st.tabs(["💰 P&L Analysis", "🛠️ Maintenance Log", "📜 Trip History"])
+
+    with tab1:
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Revenue (Orders)", f"{month_revenue:,.0f}")
+        k2.metric("Maint. Expenses", f"{month_expenses:,.0f}", delta_color="inverse")
+        k3.metric("Owner Base Fee", f"{base_fee:,.0f}", help="Before deductions")
+        k4.metric("Trips", trip_count)
+        
+        # Chart: Income vs Expense
+        fig = go.Figure(data=[
+            go.Bar(name='Revenue', x=['Financials'], y=[month_revenue], marker_color='#2ecc71'),
+            go.Bar(name='Direct Exp', x=['Financials'], y=[month_expenses], marker_color='#e74c3c'),
+            go.Bar(name='Owner Fee', x=['Financials'], y=[est_owner_cost], marker_color='#f1c40f')
+        ])
+        fig.update_layout(barmode='group', title=f"Financial Performance: {sel_month}/{sel_year}", height=350)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        st.subheader("Maintenance & Direct Costs")
+        # Filter Expenses for Table
+        exp_list = []
+        if col_exp_car:
+            col_exp_desc = get_col_by_letter(df_car_exp, 'I')
+            col_exp_day = get_col_by_letter(df_car_exp, 'W')
+            
+            for _, row in df_car_exp.iterrows():
+                if clean_id_tag(row[col_exp_car]) == selected_car_id:
+                    exp_list.append({
+                        "Date": f"{row[col_exp_y]}-{row[col_exp_m]}-{row[col_exp_day]}",
+                        "Item": row[col_exp_desc],
+                        "Cost": clean_currency(row[col_exp_amt])
+                    })
+        
+        if exp_list:
+            st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
+        else:
+            st.info("No expenses recorded for this car.")
+
+    with tab3:
+        st.subheader("Trip History")
+        # Filter Orders for Table
+        trip_list = []
+        if col_ord_car:
+            col_ord_client = get_col_by_letter(df_orders, 'B')
+            col_ord_end = get_col_by_letter(df_orders, 'V')
+            
+            for _, row in df_orders.iterrows():
+                if clean_id_tag(row[col_ord_car]) == selected_car_id:
+                    trip_list.append({
+                        "Start": row[col_ord_start],
+                        "End": row[col_ord_end],
+                        "Client": row[col_ord_client],
+                        "Revenue": clean_currency(row[col_ord_cost])
+                    })
+        
+        if trip_list:
+            st.dataframe(pd.DataFrame(trip_list), use_container_width=True)
+        else:
+            st.info("No trips recorded.")
+
 # --- 6. PAGE ROUTER ---
 if page == "🏠 Operations": show_operations(dfs)
-elif page == "🚗 Vehicle 360": st.title("🚗 Vehicle 360 (Coming Next)")
+elif page == "🚗 Vehicle 360": show_vehicle_360(dfs)
 elif page == "👥 CRM": st.title("👥 CRM (Coming Next)")
 elif page == "💰 Financial HQ": st.title("💰 Financial HQ (Coming Next)")
 elif page == "⚠️ Risk Radar": st.title("⚠️ Risk Radar (Coming Next)")
