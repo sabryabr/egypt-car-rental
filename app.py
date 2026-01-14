@@ -398,9 +398,216 @@ def show_vehicle_360(dfs):
         else:
             st.info("No trips recorded.")
 
-# --- 7. ROUTER ---
+# --- 7. MODULE 3: FINANCIAL HQ (CFO Edition) ---
+def show_financial_hq(dfs):
+    st.title("💰 Financial HQ (The CFO View)")
+    
+    if not dfs: return
+
+    df_coll = dfs['collections']
+    df_exp = dfs['expenses']
+    df_car_exp = dfs['car_expenses']
+    df_orders = dfs['orders']
+    df_cars = dfs['cars']
+
+    # --- A. FILTERS ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("🗓️ Financial Period")
+    sel_year = st.sidebar.selectbox("Fiscal Year", [2024, 2025, 2026], index=2)
+    sel_month = st.sidebar.selectbox("Fiscal Month", range(1, 13), index=0)
+
+    # --- B. DATA PROCESSING ENGINE ---
+    
+    # 1. Process INFLOW (Collections)
+    # Mapping: R=Amount, L=OrderCode, F=Type, P=Month, Q=Year
+    inflow_data = []
+    total_cash_in = 0.0
+    
+    col_coll_amt = get_col_by_letter(df_coll, 'R')
+    col_coll_order = get_col_by_letter(df_coll, 'L')
+    col_coll_type = get_col_by_letter(df_coll, 'F') # Type (Due/Debt/Deposit?)
+    col_coll_m = get_col_by_letter(df_coll, 'P')
+    col_coll_y = get_col_by_letter(df_coll, 'Q')
+
+    # Build Order Lookup for Dates (To detect Deferred Revenue)
+    order_dates = {}
+    col_ord_id = get_col_by_letter(df_orders, 'A')
+    col_ord_start = get_col_by_letter(df_orders, 'L')
+    col_ord_end = get_col_by_letter(df_orders, 'V')
+    
+    if col_ord_id and col_ord_start:
+        for _, row in df_orders.iterrows():
+            oid = clean_id_tag(row[col_ord_id])
+            s_date = pd.to_datetime(row[col_ord_start], errors='coerce')
+            e_date = pd.to_datetime(row[col_ord_end], errors='coerce')
+            order_dates[oid] = {'start': s_date, 'end': e_date}
+
+    if col_coll_amt:
+        for _, row in df_coll.iterrows():
+            try:
+                # Filter by Selected Month (Cash Basis)
+                if int(clean_currency(row[col_coll_y])) == sel_year and int(clean_currency(row[col_coll_m])) == sel_month:
+                    amt = clean_currency(row[col_coll_amt])
+                    ord_code = clean_id_tag(row[col_coll_order])
+                    inc_type = str(row[col_coll_type]).lower()
+                    
+                    # Classification Logic
+                    category = "Realized Income" # Default
+                    
+                    # 1. Check if Security Deposit
+                    if "deposit" in inc_type or "تأمين" in inc_type:
+                        category = "Security Deposit (Liability)"
+                    
+                    # 2. Check if Future (Deferred)
+                    elif ord_code in order_dates:
+                        dates = order_dates[ord_code]
+                        if pd.notnull(dates['start']) and dates['start'] > datetime(sel_year, sel_month, 28): # Rough check if starts after this month
+                            category = "Deferred Revenue (Future)"
+                    
+                    inflow_data.append({'Amount': amt, 'Category': category, 'Source': 'Collection'})
+                    total_cash_in += amt
+            except: continue
+
+    # 2. Process OUTFLOW (Expenses)
+    # General Expenses
+    col_exp_amt = get_col_by_letter(df_exp, 'X')
+    col_exp_m = get_col_by_letter(df_exp, 'V')
+    col_exp_y = get_col_by_letter(df_exp, 'W')
+    col_exp_type = get_col_by_letter(df_exp, 'I')
+    
+    outflow_data = []
+    total_cash_out = 0.0
+    
+    if col_exp_amt:
+        for _, row in df_exp.iterrows():
+            try:
+                if int(clean_currency(row[col_exp_y])) == sel_year and int(clean_currency(row[col_exp_m])) == sel_month:
+                    amt = clean_currency(row[col_exp_amt])
+                    outflow_data.append({'Amount': amt, 'Category': str(row[col_exp_type]), 'Source': 'General Ops'})
+                    total_cash_out += amt
+            except: continue
+
+    # Car Expenses (Maintenance)
+    col_carexp_amt = get_col_by_letter(df_car_exp, 'Z')
+    col_carexp_m = get_col_by_letter(df_car_exp, 'X')
+    col_carexp_y = get_col_by_letter(df_car_exp, 'Y')
+    col_carexp_type = get_col_by_letter(df_car_exp, 'F')
+    col_carexp_owner = get_col_by_letter(df_car_exp, 'O') # Due From (Owner?)
+    
+    owner_deductible_expenses = [] # Track specific expenses to charge owners
+    
+    if col_carexp_amt:
+        for _, row in df_car_exp.iterrows():
+            try:
+                if int(clean_currency(row[col_carexp_y])) == sel_year and int(clean_currency(row[col_carexp_m])) == sel_month:
+                    amt = clean_currency(row[col_carexp_amt])
+                    # Check if chargeable to owner
+                    is_owner_cost = "owner" in str(row[col_carexp_owner]).lower() or "مالك" in str(row[col_carexp_owner])
+                    
+                    outflow_data.append({'Amount': amt, 'Category': f"Fleet: {row[col_carexp_type]}", 'Source': 'Fleet Maint'})
+                    total_cash_out += amt
+                    
+                    if is_owner_cost:
+                        car_c = clean_id_tag(row[get_col_by_letter(df_car_exp, 'S')])
+                        owner_deductible_expenses.append({'Car': car_c, 'Amount': amt})
+            except: continue
+
+    # --- C. UI TABS ---
+    tab1, tab2, tab3 = st.tabs(["🌊 Cash Flow (Liquidity)", "📉 Profit & Loss (Real)", "🤝 Owner Ledger"])
+
+    # TAB 1: LIQUIDITY (Waterfall)
+    with tab1:
+        net_cash = total_cash_in - total_cash_out
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Cash In", format_egp(total_cash_in), "Collections")
+        c2.metric("Total Cash Out", format_egp(total_cash_out), "-Expenses", delta_color="inverse")
+        c3.metric("Net Liquidity", format_egp(net_cash), "Available Cash")
+        
+        # Waterfall Chart
+        fig_water = go.Figure(go.Waterfall(
+            measure = ["relative", "relative", "total"],
+            x = ["Collections (In)", "Expenses (Out)", "Net Position"],
+            y = [total_cash_in, -total_cash_out, 0],
+            connector = {"line":{"color":"rgb(63, 63, 63)"}},
+        ))
+        fig_water.update_layout(title="Monthly Cash Flow Structure", height=400)
+        st.plotly_chart(fig_water, use_container_width=True)
+
+    # TAB 2: P&L (Real Profit)
+    with tab2:
+        # Filter INFLOW for only "Realized Income"
+        real_revenue = sum(x['Amount'] for x in inflow_data if x['Category'] == "Realized Income")
+        deferred = sum(x['Amount'] for x in inflow_data if x['Category'] == "Deferred Revenue (Future)")
+        deposits = sum(x['Amount'] for x in inflow_data if x['Category'] == "Security Deposit (Liability)")
+        
+        real_profit = real_revenue - total_cash_out
+        
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Real Revenue", format_egp(real_revenue), help="Excludes Deposits & Future Trips")
+        k2.metric("Deferred Revenue", format_egp(deferred), help="Cash collected for future trips")
+        k3.metric("Security Vault", format_egp(deposits), help="Held in trust")
+        k4.metric("Net Operating Profit", format_egp(real_profit), delta_color="normal" if real_profit > 0 else "inverse")
+        
+        st.caption("ℹ️ 'Real Revenue' matches payments collected for trips ending in or before this month.")
+
+    # TAB 3: OWNER LEDGER (The Calculator)
+    with tab3:
+        st.subheader(f"Owner Payouts: {sel_month}/{sel_year}")
+        
+        # Calculate Payouts per Car
+        owner_ledger = []
+        col_car_code = get_col_by_letter(df_cars, 'A')
+        
+        for _, car in df_cars.iterrows():
+            try:
+                # 1. Get Contract Details
+                car_id = clean_id_tag(car[col_car_code])
+                base = clean_currency(car[get_col_by_letter(df_cars, 'CJ')])
+                freq = clean_currency(car[get_col_by_letter(df_cars, 'CK')])
+                deduct_pct = clean_currency(car[get_col_by_letter(df_cars, 'CL')])
+                
+                if base == 0: continue # Skip if no contract
+                if freq == 0: freq = 30 # Default
+                
+                # 2. Calculate Gross Due (Pro-rated for 1 month usually, or based on freq)
+                # Assuming this dashboard shows "Monthly" accrual:
+                monthly_gross = (base / 30) * 30 # Standardize to 30 days for monthly view
+                
+                # 3. Operations Deduction
+                ops_fee = monthly_gross * (deduct_pct / 100)
+                
+                # 4. Maintenance Deduction
+                maint_deduction = sum(x['Amount'] for x in owner_deductible_expenses if x['Car'] == car_id)
+                
+                net_payout = monthly_gross - ops_fee - maint_deduction
+                
+                owner_ledger.append({
+                    "Car": f"{car[get_col_by_letter(df_cars, 'B')]} {car[get_col_by_letter(df_cars, 'E')]}",
+                    "Owner": f"{car[get_col_by_letter(df_cars, 'BP')]}",
+                    "Gross Fee": monthly_gross,
+                    "Ops Fee": -ops_fee,
+                    "Maintenance": -maint_deduction,
+                    "Net Payout": net_payout
+                })
+            except: continue
+            
+        if owner_ledger:
+            df_ledger = pd.DataFrame(owner_ledger)
+            # Format currency columns
+            for c in ["Gross Fee", "Ops Fee", "Maintenance", "Net Payout"]:
+                df_ledger[c] = df_ledger[c].apply(format_egp)
+            
+            st.dataframe(df_ledger, use_container_width=True)
+            
+            # Download Button
+            csv = df_ledger.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Owner Statements", csv, "owner_payouts.csv", "text/csv")
+        else:
+            st.info("No owner contracts found active for this period.")
+
+# --- ROUTER UPDATE ---
 if page == "🏠 Operations": show_operations(dfs)
 elif page == "🚗 Vehicle 360": show_vehicle_360(dfs)
 elif page == "👥 CRM": st.title("👥 CRM (Coming Next)")
-elif page == "💰 Financial HQ": st.title("💰 Financial HQ (Coming Next)")
+elif page == "💰 Financial HQ": show_financial_hq(dfs) # <--- UPDATED
 elif page == "⚠️ Risk Radar": st.title("⚠️ Risk Radar (Coming Next)")
