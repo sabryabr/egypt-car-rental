@@ -34,7 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. DATA ENGINE (FIXED & BULLETPROOF) ---
+# --- 3. DATA ENGINE (COMPLETE & BULLETPROOF) ---
 @st.cache_data(ttl=300)
 def load_data_v3():
     if "gcp_service_account" not in st.secrets:
@@ -61,7 +61,7 @@ def load_data_v3():
                 seen = {}
                 for i, h in enumerate(headers):
                     h_str = str(h).strip()
-                    if not h_str: h_str = f"Col_{i}" # Name empty columns
+                    if not h_str: h_str = f"Col_{i}"
                     if h_str in seen:
                         seen[h_str] += 1
                         clean_headers.append(f"{h_str}_{seen[h_str]}")
@@ -73,9 +73,7 @@ def load_data_v3():
                 target_len = len(clean_headers)
                 clean_data = []
                 for row in data:
-                    # Truncate if too long (fix "30 columns passed" error)
                     row_fixed = row[:target_len] 
-                    # Pad if too short
                     if len(row_fixed) < target_len:
                         row_fixed += [None] * (target_len - len(row_fixed))
                     clean_data.append(row_fixed)
@@ -83,11 +81,12 @@ def load_data_v3():
                 return pd.DataFrame(clean_data, columns=clean_headers)
             return pd.DataFrame()
         except Exception as e:
-            st.error(f"⚠️ Data Load Error in '{range_name}': {str(e)}")
+            st.warning(f"⚠️ Load Error ({range_name}): {str(e)}")
             return pd.DataFrame()
 
     IDS = {
-        'cars': "1tQVkPj7tCnrKsHEIs04a1WzzC04jpOWuLsXgXOkVMkk",
+        # Your CORRECTED Cars Sheet ID
+        'cars': "1tQVkPj7tCnrKsHEIs04a1WzzC04jpOWuLsXgXOkVMkk", 
         'orders': "16mLWxdxpV6DDaGfeLf-t1XDx25H4rVEbtx_hE88nF7A",
         'clients': "1izZeNVITKEKVCT4KUnb71uFO8pzCdpUs8t8FetAxbEg",
         'expenses': "1hZoymf0CN1wOssc3ddQiZXxbJTdzJZBnamp_aCobl1Q",
@@ -95,12 +94,18 @@ def load_data_v3():
         'collections': "1jtp-ihtAOt9NNHETZ5muiL5OA9yW3WrpBIIDAf5UAyg"
     }
 
-    with st.spinner("🔄 Syncing HQ Data..."):
+    with st.spinner("🔄 Syncing All Modules..."):
         dfs = {}
-        # Fetching specific ranges to minimize junk data
+        # Fetch ALL sheets now
         dfs['cars'] = fetch_sheet(IDS['cars'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
         dfs['orders'] = fetch_sheet(IDS['orders'], "'صفحة الإدخالات للإيجارات'!A:ZZ", 1)
         dfs['clients'] = fetch_sheet(IDS['clients'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+        
+        # RESTORED THESE MISSING LINES:
+        dfs['expenses'] = fetch_sheet(IDS['expenses'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+        dfs['car_expenses'] = fetch_sheet(IDS['car_expenses'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+        dfs['collections'] = fetch_sheet(IDS['collections'], "'صفحة الإدخالات لقاعدة البيانات'!A:ZZ", 0)
+        
         return dfs
 
 # --- HELPER FUNCTIONS ---
