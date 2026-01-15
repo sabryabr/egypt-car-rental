@@ -11,33 +11,37 @@ from datetime import datetime, timedelta
 import calendar
 
 # --- 1. APP CONFIGURATION ---
-st.set_page_config(page_title="Egypt Rental OS 3.0", layout="wide", page_icon="🚘")
+st.set_page_config(page_title="Egypt Rental OS 3.0", layout="wide", page_icon="🚘", initial_sidebar_state="auto")
 
-# --- 2. ULTRA-COMPACT CSS ---
+# --- 2. MOBILE RESPONSIVE CSS ---
 st.markdown("""
 <style>
     .main { direction: rtl; font-family: 'Cairo', sans-serif; background-color: #0e1117; color: white; }
-    .block-container { padding-top: 0.5rem !important; padding-bottom: 1rem !important; }
+    .block-container { padding-top: 0.5rem !important; padding-bottom: 3rem !important; }
     [data-testid="stSidebar"] { background-color: #1e2530; color: white; }
     
-    /* Metrics - Slim */
+    /* Responsive Metrics */
     div[data-testid="metric-container"] {
         background-color: #262730; border: 1px solid #464b5d; border-radius: 6px; padding: 5px 10px; 
-        color: white; height: 70px; overflow: hidden;
+        color: white; height: auto; min-height: 70px; overflow: hidden;
     }
-    label[data-testid="stMetricLabel"] { font-size: 0.75rem !important; margin-bottom: 0 !important; }
-    div[data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+    label[data-testid="stMetricLabel"] { font-size: 0.8rem !important; margin-bottom: 0 !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.2rem !important; }
     
-    /* Elements */
+    /* Compact Elements */
     .stDataFrame { direction: ltr; font-size: 0.8rem; }
     div[data-testid="stExpander"] { border: 1px solid #464b5d; border-radius: 4px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 2px; margin-bottom: 0.5rem; }
-    .stTabs [data-baseweb="tab"] { height: 30px; padding: 0 10px; font-size: 0.85rem; }
-    h1 { font-size: 1.3rem !important; margin-bottom: 0.2rem !important; }
-    h3 { font-size: 1.0rem !important; margin-top: 0.5rem !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 2px; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    .stTabs [data-baseweb="tab"] { height: 35px; padding: 0 10px; font-size: 0.85rem; flex-grow: 1; }
+    h1 { font-size: 1.4rem !important; margin-bottom: 0.2rem !important; }
+    h3 { font-size: 1.1rem !important; margin-top: 0.5rem !important; }
     
-    /* CRM Specific */
-    .crm-card { background-color: #1e2530; padding: 15px; border-radius: 8px; border: 1px solid #333; margin-bottom: 10px; }
+    /* Mobile Adjustments */
+    @media (max-width: 640px) {
+        div[data-testid="column"] { width: 100% !important; flex: 1 1 auto !important; min-width: 100px !important; }
+        .stTabs [data-baseweb="tab"] { font-size: 0.75rem; padding: 0 5px; }
+        div[data-testid="metric-container"] { margin-bottom: 10px; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,7 +131,9 @@ def clean_currency(x):
     return float(match.group()) if match else 0.0
 
 def format_egp(x):
-    return f"{x:,.0f} EGP"
+    if x >= 1000000: return f"{x/1000000:.1f}M"
+    if x >= 1000: return f"{x/1000:.1f}k"
+    return f"{x:,.0f}"
 
 def get_date_filter_range(period_type, year, specifier):
     if period_type == "Year":
@@ -150,9 +156,11 @@ def show_operations(dfs):
     df_cars = dfs['cars']
 
     with st.expander("🔎 Filters", expanded=False):
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2 = st.columns(2)
         period_type = c1.selectbox("Period", ["Month", "Quarter", "Year"])
         sel_year = c2.selectbox("Year", [2024, 2025, 2026, 2027], index=2)
+        
+        c3, c4 = st.columns(2)
         if period_type == "Month":
             sel_spec = c3.selectbox("Month", range(1, 13), index=datetime.now().month-1)
         elif period_type == "Quarter":
@@ -224,9 +232,11 @@ def show_operations(dfs):
 
     utilization = (active_rentals / active_fleet_count * 100) if active_fleet_count > 0 else 0.0
 
-    c1, c2, c3, c4 = st.columns(4)
+    # Responsive Grid for Metrics
+    c1, c2 = st.columns(2)
     c1.metric("Live", active_rentals)
     c2.metric("Future", future_orders)
+    c3, c4 = st.columns(2)
     c3.metric("Returns", returning_today)
     c4.metric("Util %", f"{utilization:.1f}%")
     
@@ -243,7 +253,7 @@ def show_operations(dfs):
         color_map = {"Active": "#00C853", "Future": "#9b59b6", "Completed": "#95a5a6"}
         fig = px.timeline(df_timeline, x_start="Start", x_end="End", y="Car", color="Status", color_discrete_map=color_map, hover_data=["Client"])
         fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=all_car_names, type='category')
-        fig.update_layout(height=max(300, len(all_car_names) * 30), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", 
+        fig.update_layout(height=max(300, len(all_car_names) * 40), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", 
                           font=dict(color="white", size=10), margin=dict(l=10, r=10, t=10, b=10),
                           xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]))
         fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
@@ -287,14 +297,15 @@ def show_vehicle_360(dfs):
             selected_ids = [car_options[l] for l in selected_labels]
 
         st.markdown("---")
-        tf1, tf2, tf3, tf4 = st.columns([1, 1, 1, 2])
-        with tf1: period_type = st.selectbox("View", ["Month", "Quarter", "Year"], key='v360_p')
-        with tf2: sel_year = st.selectbox("Year", [2024, 2025, 2026], index=2, key='v360_y')
-        with tf3:
-            if period_type == "Month": sel_spec = st.selectbox("Month", range(1, 13), index=datetime.now().month-1, key='v360_m')
-            elif period_type == "Quarter": sel_spec = st.selectbox("Quarter", [1, 2, 3, 4], index=0, key='v360_q')
-            else: sel_spec = 0
-        with tf4: show_active = st.checkbox("Hide empty", value=False)
+        tf1, tf2 = st.columns(2)
+        period_type = tf1.selectbox("View", ["Month", "Quarter", "Year"], key='v360_p')
+        sel_year = tf2.selectbox("Year", [2024, 2025, 2026], index=2, key='v360_y')
+        
+        tf3, tf4 = st.columns(2)
+        if period_type == "Month": sel_spec = tf3.selectbox("Month", range(1, 13), index=datetime.now().month-1, key='v360_m')
+        elif period_type == "Quarter": sel_spec = tf3.selectbox("Quarter", [1, 2, 3, 4], index=0, key='v360_q')
+        else: sel_spec = 0
+        show_active = tf4.checkbox("Hide empty", value=False)
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
     if not selected_ids: st.info("👈 Select vehicles."); return
@@ -347,11 +358,12 @@ def show_vehicle_360(dfs):
 
     if show_active and not trips_data: st.warning("No data."); return
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Revenue", f"{total_revenue:,.0f}")
-    k2.metric("Maint.", f"{total_maint:,.0f}", delta_color="inverse")
-    k3.metric("Exp.", f"{total_exp:,.0f}", delta_color="inverse")
-    k4.metric("Yield", f"{total_revenue - total_maint - total_exp:,.0f}")
+    k1, k2 = st.columns(2)
+    k1.metric("Revenue", format_egp(total_revenue))
+    k2.metric("Maint.", format_egp(total_maint), delta_color="inverse")
+    k3, k4 = st.columns(2)
+    k3.metric("Exp.", format_egp(total_exp), delta_color="inverse")
+    k4.metric("Yield", format_egp(total_revenue - total_maint - total_exp))
     
     t1, t2, t3 = st.tabs(["Trips", "Maint.", "Exp."])
     with t1: st.dataframe(pd.DataFrame(trips_data), use_container_width=True) if trips_data else st.info("Empty")
@@ -364,12 +376,8 @@ def show_crm(dfs):
     if not dfs: return
     
     df_orders = dfs['orders']
-    df_clients = dfs['clients'] # Loaded but let's build from orders first for guaranteed data
-
-    # 1. Build Client DB from Orders
-    client_stats = {} # Name -> {Spend, Trips, Last Date}
+    client_stats = {} 
     col_name = get_col_by_letter(df_orders, 'B')
-    col_phone = get_col_by_letter(df_orders, 'F')
     col_cost = get_col_by_letter(df_orders, 'AE')
     col_date = get_col_by_letter(df_orders, 'L')
     col_car = get_col_by_letter(df_orders, 'C')
@@ -379,88 +387,51 @@ def show_crm(dfs):
             try:
                 name = str(row[col_name]).strip()
                 if not name or name == "nan": continue
-                
                 amt = clean_currency(row[col_cost])
                 d = pd.to_datetime(row[col_date], errors='coerce')
-                
-                if name not in client_stats:
-                    client_stats[name] = {'Spend': 0, 'Trips': 0, 'Last': pd.Timestamp.min, 'Cars': []}
-                
+                if name not in client_stats: client_stats[name] = {'Spend': 0, 'Trips': 0, 'Last': pd.Timestamp.min, 'Cars': []}
                 client_stats[name]['Spend'] += amt
                 client_stats[name]['Trips'] += 1
                 client_stats[name]['Cars'].append(str(row[col_car]))
-                if pd.notnull(d) and d > client_stats[name]['Last']: client_stats[name]['Last'] = d
             except: continue
 
-    # Search
     search = st.text_input("🔍 Search Client (Name)", "")
-    
-    # Leaderboard
     df_crm = pd.DataFrame.from_dict(client_stats, orient='index').reset_index().rename(columns={'index':'Name'})
     if not df_crm.empty:
-        df_crm['Avg Ticket'] = df_crm['Spend'] / df_crm['Trips']
         df_crm = df_crm.sort_values('Spend', ascending=False)
+        if search: df_crm = df_crm[df_crm['Name'].str.contains(search, case=False, na=False)]
 
-        if search:
-            df_crm = df_crm[df_crm['Name'].str.contains(search, case=False, na=False)]
-
-        # Top Section
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Clients", len(client_stats))
-        c2.metric("Top Spender", df_crm.iloc[0]['Name'] if not df_crm.empty else "-")
+        c1.metric("Clients", len(client_stats))
+        c2.metric("Top", df_crm.iloc[0]['Name'] if not df_crm.empty else "-")
         c3.metric("Avg LTV", format_egp(df_crm['Spend'].mean()))
 
         st.divider()
+        st.markdown("### Client List")
+        selected_client = st.dataframe(df_crm[['Name', 'Spend', 'Trips']], use_container_width=True, height=300, on_select="rerun", selection_mode="single-row")
         
-        # Details View
-        c_left, c_right = st.columns([1, 2])
-        
-        with c_left:
-            st.markdown("### Client List")
-            selected_client = st.dataframe(
-                df_crm[['Name', 'Spend', 'Trips']], 
-                use_container_width=True, 
-                height=500,
-                on_select="rerun",
-                selection_mode="single-row"
-            )
-        
-        with c_right:
-            st.markdown("### Client Profile")
-            # Get Selection
-            sel_idx = selected_client.selection.rows
-            if sel_idx:
-                client_row = df_crm.iloc[sel_idx[0]]
-                name = client_row['Name']
-                stats = client_stats[name]
-                
-                # Profile Card
-                with st.container():
-                    st.markdown(f"""
-                    <div class="crm-card">
-                        <h2>👤 {name}</h2>
-                        <p>Total Spend: <b>{format_egp(stats['Spend'])}</b> | Trips: <b>{stats['Trips']}</b></p>
-                        <p>Status: {'🏆 VIP' if stats['Spend'] > 50000 else '👤 Regular'}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                # Filter Orders for Timeline
-                client_orders = df_orders[df_orders[col_name] == name]
-                timeline_data = []
-                for _, r in client_orders.iterrows():
-                     s = pd.to_datetime(r[get_col_by_letter(df_orders, 'L')], errors='coerce')
-                     e = pd.to_datetime(r[get_col_by_letter(df_orders, 'V')], errors='coerce')
-                     if pd.notnull(s) and pd.notnull(e):
-                         timeline_data.append({'Start': s, 'End': e, 'Car': str(r[col_car]), 'Cost': clean_currency(r[col_cost])})
-                
-                if timeline_data:
-                    df_t = pd.DataFrame(timeline_data)
-                    fig = px.timeline(df_t, x_start="Start", x_end="End", y="Car", color="Cost", title="Rental History")
-                    fig.update_yaxes(autorange="reversed")
-                    fig.update_layout(height=300, margin=dict(t=30, b=10), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"))
-                    st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("👈 Select a client from the list to view full profile.")
+        sel_idx = selected_client.selection.rows
+        if sel_idx:
+            client_row = df_crm.iloc[sel_idx[0]]
+            name = client_row['Name']
+            stats = client_stats[name]
+            st.info(f"**{name}** | Spend: {format_egp(stats['Spend'])} | Trips: {stats['Trips']}")
+            
+            # Simple Timeline
+            client_orders = df_orders[df_orders[col_name] == name]
+            timeline_data = []
+            for _, r in client_orders.iterrows():
+                 s = pd.to_datetime(r[get_col_by_letter(df_orders, 'L')], errors='coerce')
+                 e = pd.to_datetime(r[get_col_by_letter(df_orders, 'V')], errors='coerce')
+                 if pd.notnull(s) and pd.notnull(e):
+                     timeline_data.append({'Start': s, 'End': e, 'Car': str(r[col_car]), 'Cost': clean_currency(r[col_cost])})
+            
+            if timeline_data:
+                df_t = pd.DataFrame(timeline_data)
+                fig = px.timeline(df_t, x_start="Start", x_end="End", y="Car", color="Cost")
+                fig.update_yaxes(autorange="reversed")
+                fig.update_layout(height=250, margin=dict(t=20, b=10, l=10, r=10), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"))
+                st.plotly_chart(fig, use_container_width=True)
 
 # --- 8. MODULE 4: FINANCIAL HQ ---
 def show_financial_hq(dfs):
@@ -474,9 +445,10 @@ def show_financial_hq(dfs):
     df_orders = dfs['orders']
 
     with st.expander("🗓️ Settings", expanded=True):
-        f1, f2, f3 = st.columns(3)
+        f1, f2 = st.columns(2)
         period_type = f1.selectbox("View", ["Month", "Quarter", "Year"], key='fin_p')
         sel_year = f2.selectbox("Fiscal Year", [2024, 2025, 2026], index=2, key='fin_y')
+        f3, f4 = st.columns(2)
         if period_type == "Month": sel_spec = f3.selectbox("Month", range(1, 13), index=0, key='fin_m')
         elif period_type == "Quarter": sel_spec = f3.selectbox("Quarter", [1, 2, 3, 4], index=0, key='fin_q')
         else: sel_spec = 0
@@ -497,7 +469,6 @@ def show_financial_hq(dfs):
                 elif period_type=="Month" and y==sel_year and m==sel_spec: valid=True
                 elif period_type=="Quarter":
                     if y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]: valid=True
-                
                 if valid:
                     amt = clean_currency(row[col_coll_amt])
                     inflow.append({"Amount": amt, "Category": "Revenue"})
@@ -606,10 +577,10 @@ def show_financial_hq(dfs):
     
     with tab1:
         net = cash_in - cash_out
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         c1.metric("In", format_egp(cash_in))
         c2.metric("Out", format_egp(cash_out), delta_color="inverse")
-        c3.metric("Net", format_egp(net))
+        st.metric("Net", format_egp(net))
         fig = go.Figure(go.Waterfall(measure=["relative", "relative", "total"], x=["In", "Out", "Net"], y=[cash_in, -cash_out, 0]))
         fig.update_layout(height=250, margin=dict(t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
@@ -618,8 +589,8 @@ def show_financial_hq(dfs):
         rev = sum(x['Amount'] for x in inflow if x['Category'] == "Revenue")
         profit = rev - cash_out - total_owner_payouts_due
         mrg = (profit/rev*100) if rev>0 else 0
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Rev", format_egp(rev)); k2.metric("Ops", format_egp(cash_out)); k3.metric("Owners", format_egp(total_owner_payouts_due)); k4.metric("Net", format_egp(profit), f"{mrg:.1f}%")
+        c1, c2 = st.columns(2)
+        c1.metric("Rev", format_egp(rev)); c2.metric("Net", format_egp(profit), f"{mrg:.1f}%")
         
         b1, b2 = st.columns(2)
         with b1: 
@@ -635,7 +606,7 @@ def show_financial_hq(dfs):
         if owner_ledger:
             df_l = pd.DataFrame(owner_ledger)
             for c in ["Net Due", "Paid (Period)", "Balance (Lifetime)"]: df_l[c] = df_l[c].apply(format_egp)
-            st.dataframe(df_l.style.applymap(lambda v: 'color: red' if 'EGP' in str(v) and float(str(v).replace(' EGP','').replace(',','')) > 100 else 'color: white'), use_container_width=True, height=400)
+            st.dataframe(df_l.style.applymap(lambda v: 'color: red' if 'EGP' in str(v) and float(str(v).replace(' EGP','').replace(',','').replace('k','000').replace('M','000000')) > 100 else 'color: white'), use_container_width=True, height=400)
         else: st.info("No Active Contracts")
 
 # --- 8. NAV ---
