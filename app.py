@@ -146,6 +146,7 @@ def get_date_filter_range(period_type, year, specifier):
         return datetime(year, specifier, 1), datetime(year, specifier, last_day, 23, 59, 59)
 
 # --- 6. MODULE 1: OPERATIONS ---
+# --- 6. MODULE 1: OPERATIONS (FIXED) ---
 def show_operations(dfs):
     st.title("🏠 Operations Command Center")
     if not dfs: return
@@ -164,7 +165,7 @@ def show_operations(dfs):
         elif period_type == "Quarter":
             sel_spec = c3.selectbox("Quarter", [1, 2, 3, 4], index=0)
         else:
-            sel_spec = 0 # Dummy
+            sel_spec = 0 
             
         fleet_status = c4.selectbox("Fleet Filter", ["All Cars", "Active Only", "Inactive Only"])
 
@@ -179,18 +180,20 @@ def show_operations(dfs):
     col_model = get_col_by_letter(df_cars, 'E')
     col_year = get_col_by_letter(df_cars, 'H')
     col_status = get_col_by_letter(df_cars, 'AZ')
-    
-    # Plate columns
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
 
     if col_code and col_status:
-        # Filter based on status selection
+        # 1. First, Clean Empty Rows (Crucial Fix)
+        # Only keep rows where Car Code is NOT empty and NOT "None"
+        valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
+        
+        # 2. Apply Status Filter
         if fleet_status == "Active Only":
-            cars_subset = df_cars[df_cars[col_status].astype(str).str.contains('Valid|ساري', case=False, na=False)]
+            cars_subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|ساري', case=False, na=False)]
         elif fleet_status == "Inactive Only":
-            cars_subset = df_cars[~df_cars[col_status].astype(str).str.contains('Valid|ساري', case=False, na=False)]
+            cars_subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|ساري', case=False, na=False)]
         else:
-            cars_subset = df_cars
+            cars_subset = valid_rows
 
         active_fleet_count = len(cars_subset)
         
@@ -204,7 +207,6 @@ def show_operations(dfs):
                     val = row[get_col_by_letter(df_cars, p)]
                     if pd.notnull(val): plate += str(val) + " "
                 
-                # FORMAT: [CODE] Name | Plate
                 car_map[c_id] = f"[{row[col_code]}] {c_name} | {plate.strip()}"
             except: continue
 
@@ -229,7 +231,6 @@ def show_operations(dfs):
                 if pd.isna(s_date) or pd.isna(e_date): continue
                 
                 # Check Date Range Filter
-                # Overlap logic: Start <= EndRange AND End >= StartRange
                 if not (s_date <= end_range and e_date >= start_range):
                     continue
 
@@ -259,14 +260,15 @@ def show_operations(dfs):
                 })
             except: continue
 
-    utilization = int((active_rentals / active_fleet_count * 100)) if active_fleet_count > 0 else 0
+    # Fix: Use 1 decimal place for small fleet sizes
+    utilization = (active_rentals / active_fleet_count * 100) if active_fleet_count > 0 else 0.0
 
     # --- D. UI VISUALS ---
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🚗 Active Rentals", active_rentals, "Live")
     c2.metric("📅 Future Bookings", future_orders, "Paid & Pending")
     c3.metric("🔄 Returning Today", returning_today, delta_color="inverse")
-    c4.metric("📊 Utilization", f"{utilization}%", f"{active_fleet_count} Visible Cars")
+    c4.metric("📊 Utilization", f"{utilization:.1f}%", f"{active_fleet_count} Visible Cars")
     
     st.divider()
     st.subheader(f"📅 Fleet Schedule ({period_type}: {sel_spec if period_type != 'Year' else ''} {sel_year})")
@@ -277,7 +279,7 @@ def show_operations(dfs):
         # Color Map
         color_map = {
             "Active": "#00C853",   # Green
-            "Future": "#9b59b6",   # Purple (Requested)
+            "Future": "#9b59b6",   # Purple
             "Completed": "#95a5a6" # Grey
         }
 
@@ -292,7 +294,7 @@ def show_operations(dfs):
             height=600, 
             plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
             font=dict(color="white"),
-            xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]), # Lock view to filter
+            xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]),
         )
         fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
         st.plotly_chart(fig, use_container_width=True)
