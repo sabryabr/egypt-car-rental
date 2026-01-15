@@ -24,7 +24,6 @@ st.markdown("""
     label[data-testid="stMetricLabel"] { color: #b0b3b8 !important; }
     div[data-testid="stMetricValue"] { color: #ffffff !important; }
     .stDataFrame { direction: ltr; }
-    /* Compact Filters */
     div[data-testid="stExpander"] { border: 1px solid #464b5d; border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
@@ -141,7 +140,6 @@ def show_operations(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
-    # Filters IN THE TAB (Not Sidebar)
     with st.expander("🔎 Filters & View Settings", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         period_type = c1.selectbox("Period Type", ["Month", "Quarter", "Year"])
@@ -253,7 +251,7 @@ def show_operations(dfs):
         st.plotly_chart(fig, use_container_width=True)
     else: st.warning("No active fleet found.")
 
-# --- 6. MODULE 2: VEHICLE 360 (UI UPDATED: NO SIDEBAR) ---
+# --- 6. MODULE 2: VEHICLE 360 ---
 def show_vehicle_360(dfs):
     st.title("🚗 Vehicle 360° Profile")
     if not dfs: return
@@ -262,15 +260,14 @@ def show_vehicle_360(dfs):
     df_orders = dfs['orders']
     df_car_exp = dfs['car_expenses']
 
-    # --- MAIN AREA FILTERS (Moved from Sidebar) ---
     with st.expander("🔎 Vehicle Control Panel", expanded=True):
         col_filters_1, col_filters_2 = st.columns([1, 2])
         
         with col_filters_1:
-            fleet_cat = st.radio("Fleet Category", ["Active Fleet", "Inactive/History"], horizontal=True)
+            # UPDATED: Added "All Fleet" option
+            fleet_cat = st.radio("Fleet Category", ["Active Fleet", "Inactive/History", "All Fleet (Active + Inactive)"], horizontal=True)
             
         with col_filters_2:
-            # 1. Build Car List based on Category
             car_options = {}
             col_code = get_col_by_letter(df_cars, 'A')
             col_status = get_col_by_letter(df_cars, 'AZ')
@@ -278,10 +275,14 @@ def show_vehicle_360(dfs):
             
             if col_code and col_status:
                 valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
+                
+                # UPDATED: Logic for "All Fleet"
                 if fleet_cat == "Active Fleet":
                     subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
-                else:
+                elif fleet_cat == "Inactive/History":
                     subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
+                else:
+                    subset = valid_rows # All Fleet
 
                 for _, row in subset.iterrows():
                     try:
@@ -295,7 +296,6 @@ def show_vehicle_360(dfs):
             selected_ids = [car_options[l] for l in selected_labels]
 
         st.markdown("---")
-        # Time Filters
         tf1, tf2, tf3, tf4 = st.columns([1, 1, 1, 2])
         with tf1:
             period_type = st.selectbox("View", ["Month", "Quarter", "Year"], key='v360_p')
@@ -316,7 +316,6 @@ def show_vehicle_360(dfs):
         st.info("👈 Please select vehicles above to generate the report.")
         return
 
-    # PROCESSING
     trips_data, maint_list, exp_list = [], [], []
     total_revenue, total_maint, total_exp = 0.0, 0.0, 0.0
     
@@ -414,7 +413,7 @@ def show_vehicle_360(dfs):
             st.dataframe(df_e, use_container_width=True)
         else: st.info("No other expenses.")
 
-# --- 7. MODULE 3: FINANCIAL HQ (UI UPDATED: NO SIDEBAR) ---
+# --- 7. MODULE 3: FINANCIAL HQ ---
 def show_financial_hq(dfs):
     st.title("💰 Financial HQ (The CFO View)")
     if not dfs: return
@@ -425,12 +424,12 @@ def show_financial_hq(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
-    # Filters In Tab
     with st.expander("🗓️ Financial Period Settings", expanded=True):
         f1, f2 = st.columns(2)
         sel_year = f1.selectbox("Fiscal Year", [2024, 2025, 2026], index=2, key='fin_y')
         sel_month = f2.selectbox("Fiscal Month", range(1, 13), index=0, key='fin_m')
 
+    # DATA PROCESSING
     inflow_data, total_cash_in = [], 0.0
     col_coll_amt = get_col_by_letter(df_coll, 'R')
     col_coll_order = get_col_by_letter(df_coll, 'L')
@@ -494,8 +493,27 @@ def show_financial_hq(dfs):
                         car_c = clean_id_tag(row[get_col_by_letter(df_car_exp, 'S')])
                         owner_deductible_expenses.append({'Car': car_c, 'Amount': amt})
             except: continue
+    
+    # Calculate Total Owner Payouts for P&L Chart
+    total_owner_payouts = 0.0
+    col_car_code = get_col_by_letter(df_cars, 'A')
+    col_status = get_col_by_letter(df_cars, 'AZ')
 
-    tab1, tab2, tab3 = st.tabs(["🌊 Cash Flow", "📉 P&L", "🤝 Owner Ledger"])
+    for _, car in df_cars.iterrows():
+        try:
+            if col_status and not any(x in str(car[col_status]) for x in ['Valid', 'Active', 'ساري']): continue
+            car_id = clean_id_tag(car[col_car_code])
+            base = clean_currency(car[get_col_by_letter(df_cars, 'CJ')])
+            deduct_pct = clean_currency(car[get_col_by_letter(df_cars, 'CL')])
+            
+            monthly_gross = (base / 30) * 30
+            ops_fee = monthly_gross * (deduct_pct / 100)
+            maint_deduction = sum(x['Amount'] for x in owner_deductible_expenses if x['Car'] == car_id)
+            total_owner_payouts += (monthly_gross - ops_fee - maint_deduction)
+        except: continue
+
+    # TABS
+    tab1, tab2, tab3 = st.tabs(["🌊 Cash Flow", "📉 P&L (Detailed)", "🤝 Owner Ledger"])
 
     with tab1:
         net_cash = total_cash_in - total_cash_out
@@ -509,24 +527,45 @@ def show_financial_hq(dfs):
 
     with tab2:
         real_revenue = sum(x['Amount'] for x in inflow_data if x['Category'] == "Realized Income")
-        real_profit = real_revenue - total_cash_out
-        k1, k2 = st.columns(2)
+        real_profit = real_revenue - total_cash_out - total_owner_payouts
+        margin = (real_profit / real_revenue * 100) if real_revenue > 0 else 0
+
+        k1, k2, k3, k4 = st.columns(4)
         k1.metric("Real Revenue", format_egp(real_revenue))
-        k2.metric("Net Operating Profit", format_egp(real_profit))
+        k2.metric("Op. Expenses", format_egp(total_cash_out), delta_color="inverse")
+        k3.metric("Owner Payouts", format_egp(total_owner_payouts), delta_color="inverse")
+        k4.metric("Net Profit", format_egp(real_profit), f"{margin:.1f}% Margin")
+
+        # BREAKDOWN CHARTS
+        b1, b2 = st.columns(2)
+        with b1:
+            # Expense Composition
+            fig_pie = px.pie(names=["Op. Expenses", "Owner Payouts", "Net Profit"], 
+                             values=[total_cash_out, total_owner_payouts, max(0, real_profit)],
+                             title="Profit Distribution", hole=0.4,
+                             color_discrete_sequence=px.colors.qualitative.Pastel)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with b2:
+             # Revenue vs Cost Bar
+             fig_bar = go.Figure(data=[
+                 go.Bar(name='Revenue', x=['P&L'], y=[real_revenue], marker_color='#2ecc71'),
+                 go.Bar(name='Expenses', x=['P&L'], y=[total_cash_out + total_owner_payouts], marker_color='#e74c3c')
+             ])
+             fig_bar.update_layout(title="Revenue vs Costs", barmode='group')
+             st.plotly_chart(fig_bar, use_container_width=True)
 
     with tab3:
         st.subheader(f"Owner Payouts: {sel_month}/{sel_year}")
         owner_ledger = []
-        col_car_code = get_col_by_letter(df_cars, 'A')
         for _, car in df_cars.iterrows():
             try:
+                if col_status and not any(x in str(car[col_status]) for x in ['Valid', 'Active', 'ساري']): continue
                 car_id = clean_id_tag(car[col_car_code])
                 base = clean_currency(car[get_col_by_letter(df_cars, 'CJ')])
-                freq = clean_currency(car[get_col_by_letter(df_cars, 'CK')])
                 deduct_pct = clean_currency(car[get_col_by_letter(df_cars, 'CL')])
                 
-                if base == 0: continue 
-                if freq == 0: freq = 30
+                if base == 0: continue
                 
                 monthly_gross = (base / 30) * 30
                 ops_fee = monthly_gross * (deduct_pct / 100)
@@ -543,7 +582,7 @@ def show_financial_hq(dfs):
             df_ledger = pd.DataFrame(owner_ledger)
             for c in ["Gross", "Ops Fee", "Maint", "Net"]: df_ledger[c] = df_ledger[c].apply(format_egp)
             st.dataframe(df_ledger, use_container_width=True)
-        else: st.info("No owner contracts found.")
+        else: st.info("No active owner contracts found.")
 
 # --- 8. PAGE ROUTER ---
 st.sidebar.title("🚘 Rental OS 3.0")
