@@ -123,10 +123,8 @@ def clean_id_tag(x):
     return str(x).strip().replace(" ", "").lower()
 
 def clean_client_code(x):
-    """Robust cleaner for Client IDs (handles 343.0 vs 343)"""
     if pd.isna(x): return "unknown"
     s = str(x).strip()
-    # If it looks like a float ending in .0, strip it
     if s.endswith(".0"): s = s[:-2]
     return s
 
@@ -165,7 +163,6 @@ def show_operations(dfs):
         c1, c2 = st.columns(2)
         period_type = c1.selectbox("Period", ["Month", "Quarter", "Year"])
         sel_year = c2.selectbox("Year", [2024, 2025, 2026, 2027], index=2)
-        
         c3, c4 = st.columns(2)
         if period_type == "Month":
             sel_spec = c3.selectbox("Month", range(1, 13), index=datetime.now().month-1)
@@ -265,7 +262,7 @@ def show_operations(dfs):
         st.plotly_chart(fig, use_container_width=True)
     else: st.warning("No fleet.")
 
-# --- 6. MODULE 2: VEHICLE 360 ---
+# --- 6. MODULE 2: VEHICLE 360 (FIXED CRASH) ---
 def show_vehicle_360(dfs):
     st.title("🚗 Vehicle 360")
     if not dfs: return
@@ -282,7 +279,6 @@ def show_vehicle_360(dfs):
             col_code = get_col_by_letter(df_cars, 'A')
             col_status = get_col_by_letter(df_cars, 'AZ')
             plate_cols = ['AC','AB','AA','Z','Y','X','W']
-            
             if col_code and col_status:
                 valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
                 if fleet_cat == "Active": subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
@@ -295,7 +291,6 @@ def show_vehicle_360(dfs):
                         plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
                         car_options[f"[{row[col_code]}] {c_label} | {plate.strip()}"] = c_id
                     except: continue
-
             select_all = st.checkbox("Select All")
             default_sel = list(car_options.keys()) if select_all else []
             selected_labels = st.multiselect("Vehicles", list(car_options.keys()), default=default_sel)
@@ -305,7 +300,6 @@ def show_vehicle_360(dfs):
         tf1, tf2 = st.columns(2)
         period_type = tf1.selectbox("View", ["Month", "Quarter", "Year"], key='v360_p')
         sel_year = tf2.selectbox("Year", [2024, 2025, 2026], index=2, key='v360_y')
-        
         tf3, tf4 = st.columns(2)
         if period_type == "Month": sel_spec = tf3.selectbox("Month", range(1, 13), index=datetime.now().month-1, key='v360_m')
         elif period_type == "Quarter": sel_spec = tf3.selectbox("Quarter", [1, 2, 3, 4], index=0, key='v360_q')
@@ -351,7 +345,6 @@ def show_vehicle_360(dfs):
                     elif period_type=="Month" and y==sel_year and m==sel_spec: valid=True
                     elif period_type=="Quarter":
                          if y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]: valid=True
-                    
                     if valid:
                         amt = clean_currency(row[col_exp_amt])
                         is_maint = pd.notnull(row[col_item_maint]) and str(row[col_item_maint]).strip() != ""
@@ -371,11 +364,27 @@ def show_vehicle_360(dfs):
     k4.metric("Yield", format_egp(total_revenue - total_maint - total_exp))
     
     t1, t2, t3 = st.tabs(["Trips", "Maint.", "Exp."])
-    with t1: st.dataframe(pd.DataFrame(trips_data), use_container_width=True) if trips_data else st.info("Empty")
-    with t2: st.dataframe(pd.DataFrame(maint_list), use_container_width=True) if maint_list else st.info("Empty")
-    with t3: st.dataframe(pd.DataFrame(exp_list), use_container_width=True) if exp_list else st.info("Empty")
+    
+    # FIXED: Replaced one-liners with if/else to prevent SyntaxError/AST crashes
+    with t1:
+        if trips_data:
+            st.dataframe(pd.DataFrame(trips_data), use_container_width=True)
+        else:
+            st.info("Empty")
+    
+    with t2:
+        if maint_list:
+            st.dataframe(pd.DataFrame(maint_list), use_container_width=True)
+        else:
+            st.info("Empty")
+            
+    with t3:
+        if exp_list:
+            st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
+        else:
+            st.info("Empty")
 
-# --- 7. MODULE 3: CRM (FIXED ID MATCHING & DETAIL) ---
+# --- 7. MODULE 3: CRM (FIXED COLUMNS) ---
 def show_crm(dfs):
     st.title("👥 CRM")
     if not dfs: return
@@ -398,35 +407,31 @@ def show_crm(dfs):
             except: continue
 
     # 2. Client Map (ID -> Name)
-    client_id_map = {} # ID -> {Name, Code}
+    client_id_map = {} 
     client_db = {}
     
+    # UPDATED: Last Name is now Column D (was C)
     col_cl_id = get_col_by_letter(df_clients, 'A')
     col_cl_first = get_col_by_letter(df_clients, 'B')
-    col_cl_last = get_col_by_letter(df_clients, 'C')
+    col_cl_last = get_col_by_letter(df_clients, 'D') # SHIFTED HERE
     
     if col_cl_id:
         for _, row in df_clients.iterrows():
             try:
-                # Use robust cleaner for the Client ID from Sheet
                 cid = clean_client_code(row[col_cl_id])
                 
-                full_name = f"{row[col_cl_first]} {row[col_cl_last]}".strip()
+                # Check for None values before joining
+                fname = str(row[col_cl_first]) if pd.notnull(row[col_cl_first]) else ""
+                lname = str(row[col_cl_last]) if pd.notnull(row[col_cl_last]) else ""
+                full_name = f"{fname} {lname}".strip()
+                
                 if not full_name: continue
                 
-                # Map ID "343" -> "John Doe"
                 client_id_map[cid] = full_name
-                
-                # Init DB entry
-                client_db[full_name] = {
-                    'Display': f"[{cid}] {full_name}", 
-                    'Name': full_name, 
-                    'Spend': 0, 'Trips': 0, 
-                    'History': []
-                }
+                client_db[full_name] = {'Display': f"[{cid}] {full_name}", 'Name': full_name, 'Spend': 0, 'Trips': 0, 'History': []}
             except: continue
 
-    # 3. Process Orders with ID Lookup
+    # 3. Process Orders
     col_ord_name = get_col_by_letter(df_orders, 'B')
     col_ord_cost = get_col_by_letter(df_orders, 'AE')
     col_ord_s = get_col_by_letter(df_orders, 'L')
@@ -437,16 +442,10 @@ def show_crm(dfs):
     if col_ord_name:
         for _, row in df_orders.iterrows():
             try:
-                # Use robust cleaner for the Value in Orders (which might be "343.0")
                 raw_val = clean_client_code(row[col_ord_name])
-                
                 if not raw_val or raw_val == "nan": continue
                 
-                # Check if cleaned raw_val is an ID in our map
                 real_name = client_id_map.get(raw_val, raw_val) 
-                
-                # If lookup failed, it might be a Name, not an ID. Check if Name exists in DB.
-                # If not, create temp entry
                 if real_name not in client_db:
                     client_db[real_name] = {'Display': f"[?] {real_name}", 'Name': real_name, 'Spend': 0, 'Trips': 0, 'History': []}
                 
@@ -695,7 +694,7 @@ def show_financial_hq(dfs):
             st.dataframe(df_l.style.applymap(lambda v: 'color: red' if 'EGP' in str(v) and float(str(v).replace(' EGP','').replace(',','').replace('k','000').replace('M','000000')) > 100 else 'color: white'), use_container_width=True, height=400)
         else: st.info("No Active Contracts")
 
-# --- 9. MODULE 5: RISK RADAR ---
+# --- 9. MODULE 5: RISK RADAR (SEPARATED) ---
 def show_risk_radar(dfs):
     st.title("⚠️ Risk Radar")
     if not dfs: return
@@ -704,41 +703,63 @@ def show_risk_radar(dfs):
     today = datetime.now()
     LIMIT_URGENT = 30
     LIMIT_WARN = 60
-    risks = []
+    
+    # Lists for separated tabs
+    risks_lic, risks_ins, risks_con = [], [], []
     
     # Columns
-    col_lic_end = get_col_by_letter(df_cars, 'AT')
-    col_ins_end = get_col_by_letter(df_cars, 'BK')
-    col_con_end = get_col_by_letter(df_cars, 'BC')
+    col_lic_end = get_col_by_letter(df_cars, 'AT') # License
+    col_ins_end = get_col_by_letter(df_cars, 'BK') # Insurance
+    col_con_end = get_col_by_letter(df_cars, 'BC') # Contract
     col_name = get_col_by_letter(df_cars, 'B')
+    col_model = get_col_by_letter(df_cars, 'E')
     col_status = get_col_by_letter(df_cars, 'AZ')
+    plate_cols = ['AC','AB','AA','Z','Y','X','W']
 
     for _, row in df_cars.iterrows():
         try:
             if col_status and not any(x in str(row[col_status]) for x in ['Valid', 'Active', 'ساري']): continue
-            cname = str(row[col_name])
+            cname = f"{row[col_name]} {row[col_model]}"
+            plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])]).strip()
             
-            for c, t in [(col_lic_end, 'License'), (col_ins_end, 'Insurance'), (col_con_end, 'Contract')]:
-                if c:
-                    d = pd.to_datetime(row[c], errors='coerce')
+            # Helper to check date
+            def check(col, lst):
+                if col:
+                    d = pd.to_datetime(row[col], errors='coerce')
                     if pd.notnull(d):
                         days = (d - today).days
                         if days < LIMIT_WARN:
-                            risks.append({'Car': cname, 'Type': t, 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Status': 'Urgent' if days < LIMIT_URGENT else 'Warning'})
+                            lst.append({'Car': cname, 'Plate': plate, 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Status': 'Urgent' if days < LIMIT_URGENT else 'Warning'})
+
+            check(col_lic_end, risks_lic)
+            check(col_ins_end, risks_ins)
+            check(col_con_end, risks_con)
+
         except: continue
 
-    if risks:
-        df_risk = pd.DataFrame(risks)
-        c1, c2 = st.columns(2)
-        c1.metric("🔴 Urgent", len(df_risk[df_risk['Status']=='Urgent']))
-        c2.metric("🟡 Warning", len(df_risk[df_risk['Status']=='Warning']))
-        
-        def highlight_risk(row):
-            return ['background-color: #3e1f1f' if row['Status'] == 'Urgent' else 'background-color: #3e331f'] * len(row)
+    # Styling function
+    def highlight_risk(row):
+        return ['background-color: #3e1f1f' if row['Status'] == 'Urgent' else 'background-color: #3e331f'] * len(row)
 
-        st.dataframe(df_risk.style.apply(highlight_risk, axis=1), use_container_width=True, hide_index=True)
-    else:
-        st.success("✅ All systems go!")
+    t1, t2, t3 = st.tabs(["📄 License", "🛡️ Insurance", "📝 Contracts"])
+    
+    with t1:
+        if risks_lic:
+            df = pd.DataFrame(risks_lic).sort_values('Days')
+            st.dataframe(df.style.apply(highlight_risk, axis=1), use_container_width=True, hide_index=True)
+        else: st.success("No License Issues")
+        
+    with t2:
+        if risks_ins:
+            df = pd.DataFrame(risks_ins).sort_values('Days')
+            st.dataframe(df.style.apply(highlight_risk, axis=1), use_container_width=True, hide_index=True)
+        else: st.success("No Insurance Issues")
+        
+    with t3:
+        if risks_con:
+            df = pd.DataFrame(risks_con).sort_values('Days')
+            st.dataframe(df.style.apply(highlight_risk, axis=1), use_container_width=True, hide_index=True)
+        else: st.success("No Contract Issues")
 
 # --- 10. NAV ---
 st.sidebar.title("🚘 Rental OS")
