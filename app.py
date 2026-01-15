@@ -145,8 +145,7 @@ def get_date_filter_range(period_type, year, specifier):
         _, last_day = calendar.monthrange(year, specifier)
         return datetime(year, specifier, 1), datetime(year, specifier, last_day, 23, 59, 59)
 
-# --- 6. MODULE 1: OPERATIONS ---
-# --- 6. MODULE 1: OPERATIONS (FIXED) ---
+# --- 6. MODULE 1: OPERATIONS (DEFAULT: ACTIVE ONLY) ---
 def show_operations(dfs):
     st.title("🏠 Operations Command Center")
     if not dfs: return
@@ -167,7 +166,8 @@ def show_operations(dfs):
         else:
             sel_spec = 0 
             
-        fleet_status = c4.selectbox("Fleet Filter", ["All Cars", "Active Only", "Inactive Only"])
+        # UPDATE: "Active Only" is now the default (Index 0)
+        fleet_status = c4.selectbox("Fleet Filter", ["Active Only", "All Cars", "Inactive Only"], index=0)
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
@@ -183,12 +183,12 @@ def show_operations(dfs):
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
 
     if col_code and col_status:
-        # 1. First, Clean Empty Rows (Crucial Fix)
-        # Only keep rows where Car Code is NOT empty and NOT "None"
+        # 1. CLEAN: Remove empty rows (Fixes the "516 Cars" bug)
         valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
         
-        # 2. Apply Status Filter
+        # 2. FILTER: Apply the Active/Inactive logic
         if fleet_status == "Active Only":
+            # Only keeps cars marked 'Valid' or 'ساري'
             cars_subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|ساري', case=False, na=False)]
         elif fleet_status == "Inactive Only":
             cars_subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|ساري', case=False, na=False)]
@@ -197,6 +197,7 @@ def show_operations(dfs):
 
         active_fleet_count = len(cars_subset)
         
+        # 3. MAP: Build the list of visible cars
         for _, row in cars_subset.iterrows(): 
             try:
                 c_id = clean_id_tag(row[col_code])
@@ -230,14 +231,14 @@ def show_operations(dfs):
                 
                 if pd.isna(s_date) or pd.isna(e_date): continue
                 
-                # Check Date Range Filter
+                # Date Range Check
                 if not (s_date <= end_range and e_date >= start_range):
                     continue
 
                 raw_car_id = row[col_car_ord]
                 car_id_clean = clean_id_tag(raw_car_id)
                 
-                # Only include if car is in our filtered map
+                # CRITICAL: If car was filtered out (inactive), skip its order
                 if car_id_clean not in car_map: continue
                 
                 car_name = car_map[car_id_clean]
@@ -260,7 +261,7 @@ def show_operations(dfs):
                 })
             except: continue
 
-    # Fix: Use 1 decimal place for small fleet sizes
+    # Utilization Math
     utilization = (active_rentals / active_fleet_count * 100) if active_fleet_count > 0 else 0.0
 
     # --- D. UI VISUALS ---
@@ -268,15 +269,14 @@ def show_operations(dfs):
     c1.metric("🚗 Active Rentals", active_rentals, "Live")
     c2.metric("📅 Future Bookings", future_orders, "Paid & Pending")
     c3.metric("🔄 Returning Today", returning_today, delta_color="inverse")
-    c4.metric("📊 Utilization", f"{utilization:.1f}%", f"{active_fleet_count} Visible Cars")
+    c4.metric("📊 Utilization", f"{utilization:.1f}%", f"{active_fleet_count} Active Cars")
     
     st.divider()
-    st.subheader(f"📅 Fleet Schedule ({period_type}: {sel_spec if period_type != 'Year' else ''} {sel_year})")
+    st.subheader(f"📅 Fleet Schedule ({period_type} View)")
     
     if timeline_data:
         df_timeline = pd.DataFrame(timeline_data)
         
-        # Color Map
         color_map = {
             "Active": "#00C853",   # Green
             "Future": "#9b59b6",   # Purple
@@ -291,14 +291,18 @@ def show_operations(dfs):
         )
         fig.update_yaxes(autorange="reversed")
         fig.update_layout(
-            height=600, 
+            height=max(400, len(car_map)*30), # Auto-height based on number of cars
             plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
             font=dict(color="white"),
             xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]),
         )
         fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
         st.plotly_chart(fig, use_container_width=True)
-    else: st.warning("No bookings found for this period/filter.")
+    else: 
+        if active_fleet_count == 0:
+            st.warning("No active cars found. Check your 'Cars' sheet column AZ for 'Valid' or 'ساري'.")
+        else:
+            st.info("No bookings found for the active fleet in this period.")
 
 # --- 7. MODULE 2: VEHICLE 360 ---
 def show_vehicle_360(dfs):
