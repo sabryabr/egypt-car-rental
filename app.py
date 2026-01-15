@@ -24,6 +24,8 @@ st.markdown("""
     label[data-testid="stMetricLabel"] { color: #b0b3b8 !important; }
     div[data-testid="stMetricValue"] { color: #ffffff !important; }
     .stDataFrame { direction: ltr; }
+    /* Compact Filters */
+    div[data-testid="stExpander"] { border: 1px solid #464b5d; border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -76,7 +78,7 @@ def load_data_v3():
             return pd.DataFrame()
 
     IDS = {
-        'cars': "1tQVkPj7tCnrKsHEIs04a1WzzC04jpOWuLsXgXOkVMkk", 
+        'cars': "1tQVkPj7tCnrKsHEIs04a1WzzC04jpOWuLsXgXOkVMkk",
         'orders': "1T6j2xnRBTY31crQcJHioKurs4Rvaj-VlEQkm6joGxGM",
         'clients': "13YZOGdRCEy7IMZHiTmjLFyO417P8dD0m5Sh9xwKI8js",
         'expenses': "1hZoymf0CN1wOssc3ddQiZXxbJTdzJZBnamp_aCobl1Q",
@@ -139,6 +141,7 @@ def show_operations(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
+    # Filters IN THE TAB (Not Sidebar)
     with st.expander("🔎 Filters & View Settings", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         period_type = c1.selectbox("Period Type", ["Month", "Quarter", "Year"])
@@ -250,7 +253,7 @@ def show_operations(dfs):
         st.plotly_chart(fig, use_container_width=True)
     else: st.warning("No active fleet found.")
 
-# --- 6. MODULE 2: VEHICLE 360 (UPDATED: SEPARATE ACTIVE/INACTIVE) ---
+# --- 6. MODULE 2: VEHICLE 360 (UI UPDATED: NO SIDEBAR) ---
 def show_vehicle_360(dfs):
     st.title("🚗 Vehicle 360° Profile")
     if not dfs: return
@@ -259,58 +262,64 @@ def show_vehicle_360(dfs):
     df_orders = dfs['orders']
     df_car_exp = dfs['car_expenses']
 
-    st.sidebar.markdown("---")
-    st.sidebar.header("🔍 Filters")
-    
-    # 1. Fleet Category Toggle
-    fleet_cat = st.sidebar.radio("Fleet Category", ["Active Fleet", "Inactive/History"], horizontal=True)
-
-    # 2. Build List based on Category
-    car_options = {}
-    col_code = get_col_by_letter(df_cars, 'A')
-    col_status = get_col_by_letter(df_cars, 'AZ')
-    plate_cols = ['AC','AB','AA','Z','Y','X','W']
-    
-    if col_code and col_status:
-        # Strict Row Filter
-        valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
+    # --- MAIN AREA FILTERS (Moved from Sidebar) ---
+    with st.expander("🔎 Vehicle Control Panel", expanded=True):
+        col_filters_1, col_filters_2 = st.columns([1, 2])
         
-        if fleet_cat == "Active Fleet":
-            subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
-        else:
-            subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
+        with col_filters_1:
+            fleet_cat = st.radio("Fleet Category", ["Active Fleet", "Inactive/History"], horizontal=True)
+            
+        with col_filters_2:
+            # 1. Build Car List based on Category
+            car_options = {}
+            col_code = get_col_by_letter(df_cars, 'A')
+            col_status = get_col_by_letter(df_cars, 'AZ')
+            plate_cols = ['AC','AB','AA','Z','Y','X','W']
+            
+            if col_code and col_status:
+                valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
+                if fleet_cat == "Active Fleet":
+                    subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
+                else:
+                    subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
 
-        for _, row in subset.iterrows():
-            try:
-                c_id = clean_id_tag(row[col_code])
-                c_label = f"{row[get_col_by_letter(df_cars, 'B')]} {row[get_col_by_letter(df_cars, 'E')]}"
-                plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
-                car_options[f"[{row[col_code]}] {c_label} | {plate.strip()}"] = c_id
-            except: continue
+                for _, row in subset.iterrows():
+                    try:
+                        c_id = clean_id_tag(row[col_code])
+                        c_label = f"{row[get_col_by_letter(df_cars, 'B')]} {row[get_col_by_letter(df_cars, 'E')]}"
+                        plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
+                        car_options[f"[{row[col_code]}] {c_label} | {plate.strip()}"] = c_id
+                    except: continue
 
-    selected_labels = st.sidebar.multiselect("Select Vehicles", list(car_options.keys()))
-    selected_ids = [car_options[l] for l in selected_labels]
-    
-    period_type = st.sidebar.selectbox("Period Type", ["Month", "Quarter", "Year"], key='v360_p')
-    sel_year = st.sidebar.selectbox("Year", [2024, 2025, 2026], index=2, key='v360_y')
-    if period_type == "Month":
-        sel_spec = st.sidebar.selectbox("Month", range(1, 13), index=datetime.now().month-1, key='v360_m')
-    elif period_type == "Quarter":
-        sel_spec = st.sidebar.selectbox("Quarter", [1, 2, 3, 4], index=0, key='v360_q')
-    else: sel_spec = 0
+            selected_labels = st.multiselect("Select Vehicles to Compare", list(car_options.keys()))
+            selected_ids = [car_options[l] for l in selected_labels]
+
+        st.markdown("---")
+        # Time Filters
+        tf1, tf2, tf3, tf4 = st.columns([1, 1, 1, 2])
+        with tf1:
+            period_type = st.selectbox("View", ["Month", "Quarter", "Year"], key='v360_p')
+        with tf2:
+            sel_year = st.selectbox("Year", [2024, 2025, 2026], index=2, key='v360_y')
+        with tf3:
+            if period_type == "Month":
+                sel_spec = st.selectbox("Month", range(1, 13), index=datetime.now().month-1, key='v360_m')
+            elif period_type == "Quarter":
+                sel_spec = st.selectbox("Quarter", [1, 2, 3, 4], index=0, key='v360_q')
+            else: sel_spec = 0
+        with tf4:
+            show_only_active = st.checkbox("Hide cars with no revenue in period", value=False)
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
-    show_only_active = st.sidebar.checkbox("Show only cars with trips in period", value=False)
 
     if not selected_ids:
-        st.info("Please select at least one vehicle from the sidebar.")
+        st.info("👈 Please select vehicles above to generate the report.")
         return
 
-    # PROCESSING (Revenue & Expenses)
+    # PROCESSING
     trips_data, maint_list, exp_list = [], [], []
     total_revenue, total_maint, total_exp = 0.0, 0.0, 0.0
     
-    # Revenue
     col_ord_start = get_col_by_letter(df_orders, 'L')
     col_ord_cost = get_col_by_letter(df_orders, 'AE')
     col_ord_car = get_col_by_letter(df_orders, 'C')
@@ -330,7 +339,6 @@ def show_vehicle_360(dfs):
                         "Order #": row[col_ord_id], "Start": d, "Client": row[col_ord_client], "Revenue": rev
                     })
 
-    # Expenses
     col_exp_car = get_col_by_letter(df_car_exp, 'S')
     col_exp_amt = get_col_by_letter(df_car_exp, 'Z')
     col_exp_day = get_col_by_letter(df_car_exp, 'W')
@@ -406,7 +414,7 @@ def show_vehicle_360(dfs):
             st.dataframe(df_e, use_container_width=True)
         else: st.info("No other expenses.")
 
-# --- 7. MODULE 3: FINANCIAL HQ (RESTORED) ---
+# --- 7. MODULE 3: FINANCIAL HQ (UI UPDATED: NO SIDEBAR) ---
 def show_financial_hq(dfs):
     st.title("💰 Financial HQ (The CFO View)")
     if not dfs: return
@@ -417,10 +425,11 @@ def show_financial_hq(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
-    st.sidebar.markdown("---")
-    st.sidebar.header("🗓️ Financial Period")
-    sel_year = st.sidebar.selectbox("Fiscal Year", [2024, 2025, 2026], index=2, key='fin_y')
-    sel_month = st.sidebar.selectbox("Fiscal Month", range(1, 13), index=0, key='fin_m')
+    # Filters In Tab
+    with st.expander("🗓️ Financial Period Settings", expanded=True):
+        f1, f2 = st.columns(2)
+        sel_year = f1.selectbox("Fiscal Year", [2024, 2025, 2026], index=2, key='fin_y')
+        sel_month = f2.selectbox("Fiscal Month", range(1, 13), index=0, key='fin_m')
 
     inflow_data, total_cash_in = [], 0.0
     col_coll_amt = get_col_by_letter(df_coll, 'R')
