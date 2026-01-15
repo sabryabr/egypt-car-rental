@@ -13,18 +13,38 @@ import calendar
 # --- 1. APP CONFIGURATION ---
 st.set_page_config(page_title="Egypt Rental OS 3.0", layout="wide", page_icon="🚘")
 
-# --- 2. CUSTOM CSS ---
+# --- 2. CUSTOM CSS (COMPACT MODE) ---
 st.markdown("""
 <style>
+    /* Main Layout - Reduce Padding */
     .main { direction: rtl; font-family: 'Cairo', sans-serif; background-color: #0e1117; color: white; }
+    .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+    
+    /* Sidebar */
     [data-testid="stSidebar"] { background-color: #1e2530; color: white; }
+    
+    /* Metrics - Compact */
     div[data-testid="metric-container"] {
-        background-color: #262730; border: 1px solid #464b5d; border-radius: 10px; padding: 15px; color: white;
+        background-color: #262730; 
+        border: 1px solid #464b5d; 
+        border-radius: 8px; 
+        padding: 10px; 
+        color: white;
+        height: 100px; /* Fixed small height */
+        overflow: hidden;
     }
-    label[data-testid="stMetricLabel"] { color: #b0b3b8 !important; }
-    div[data-testid="stMetricValue"] { color: #ffffff !important; }
+    label[data-testid="stMetricLabel"] { color: #b0b3b8 !important; font-size: 0.9rem !important; }
+    div[data-testid="stMetricValue"] { color: #ffffff !important; font-size: 1.4rem !important; }
+    
+    /* Tables */
     .stDataFrame { direction: ltr; }
-    div[data-testid="stExpander"] { border: 1px solid #464b5d; border-radius: 8px; }
+    
+    /* Filters - Compact */
+    div[data-testid="stExpander"] { border: 1px solid #464b5d; border-radius: 6px; }
+    
+    /* Tabs - Compact Headers */
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] { height: 40px; white-space: pre-wrap; padding-top: 0; padding-bottom: 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -140,7 +160,8 @@ def show_operations(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
-    with st.expander("🔎 Filters & View Settings", expanded=True):
+    # Filter Panel (Collapsed by Default)
+    with st.expander("🔎 Filters & View Settings", expanded=False):
         c1, c2, c3, c4 = st.columns(4)
         period_type = c1.selectbox("Period Type", ["Month", "Quarter", "Year"])
         sel_year = c2.selectbox("Year", [2024, 2025, 2026, 2027], index=2)
@@ -228,8 +249,8 @@ def show_operations(dfs):
     c3.metric("🔄 Returning Today", returning_today, delta_color="inverse")
     c4.metric("📊 Utilization", f"{utilization:.1f}%", f"{active_fleet_count} Visible Cars")
     
-    st.divider()
-    st.subheader(f"📅 Fleet Schedule ({period_type})")
+    # Use smaller font for header
+    st.markdown(f"##### 📅 Schedule ({period_type})")
     
     all_car_names = sorted(list(car_map.values()))
     if timeline_data:
@@ -246,7 +267,15 @@ def show_operations(dfs):
         color_map = {"Active": "#00C853", "Future": "#9b59b6", "Completed": "#95a5a6"}
         fig = px.timeline(df_timeline, x_start="Start", x_end="End", y="Car", color="Status", color_discrete_map=color_map, hover_data=["Client"])
         fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=all_car_names, type='category')
-        fig.update_layout(height=max(500, len(all_car_names) * 50), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"), xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]))
+        
+        # Reduced Height for Compact View
+        fig.update_layout(
+            height=max(350, len(all_car_names) * 35), 
+            plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", 
+            font=dict(color="white", size=10), 
+            margin=dict(l=10, r=10, t=20, b=20),
+            xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range])
+        )
         fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
         st.plotly_chart(fig, use_container_width=True)
     else: st.warning("No active fleet found.")
@@ -260,11 +289,11 @@ def show_vehicle_360(dfs):
     df_orders = dfs['orders']
     df_car_exp = dfs['car_expenses']
 
-    with st.expander("🔎 Vehicle Control Panel", expanded=True):
+    # Compact Filter Panel (Collapsed)
+    with st.expander("🔎 Vehicle Control Panel", expanded=False):
         col_filters_1, col_filters_2 = st.columns([1, 2])
         
         with col_filters_1:
-            # UPDATED: Added "All Fleet" option
             fleet_cat = st.radio("Fleet Category", ["Active Fleet", "Inactive/History", "All Fleet (Active + Inactive)"], horizontal=True)
             
         with col_filters_2:
@@ -276,13 +305,12 @@ def show_vehicle_360(dfs):
             if col_code and col_status:
                 valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
                 
-                # UPDATED: Logic for "All Fleet"
                 if fleet_cat == "Active Fleet":
                     subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
                 elif fleet_cat == "Inactive/History":
                     subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
                 else:
-                    subset = valid_rows # All Fleet
+                    subset = valid_rows 
 
                 for _, row in subset.iterrows():
                     try:
@@ -313,7 +341,7 @@ def show_vehicle_360(dfs):
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
     if not selected_ids:
-        st.info("👈 Please select vehicles above to generate the report.")
+        st.info("👈 Open Filters to select vehicles.")
         return
 
     trips_data, maint_list, exp_list = [], [], []
@@ -382,18 +410,17 @@ def show_vehicle_360(dfs):
                 except: continue
 
     if show_only_active and not trips_data:
-        st.warning("No trips found for selected vehicles in this period.")
+        st.warning("No trips found.")
         return
 
-    st.subheader(f"📊 Fleet Performance ({len(selected_ids)} Vehicles)")
+    st.markdown(f"**Performance Summary ({len(selected_ids)} Vehicles)**")
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Total Revenue", f"{total_revenue:,.0f} EGP")
     k2.metric("Maintenance", f"{total_maint:,.0f} EGP", delta_color="inverse")
     k3.metric("Other Expenses", f"{total_exp:,.0f} EGP", delta_color="inverse")
     k4.metric("Net Yield", f"{total_revenue - total_maint - total_exp:,.0f} EGP")
-    st.divider()
     
-    t1, t2, t3 = st.tabs(["📜 Trip Details", "🛠️ Maintenance Log", "💸 Expense Log"])
+    t1, t2, t3 = st.tabs(["📜 Trips", "🛠️ Maint.", "💸 Exp."])
     with t1:
         if trips_data:
             df_t = pd.DataFrame(trips_data)
@@ -405,13 +432,13 @@ def show_vehicle_360(dfs):
             df_m = pd.DataFrame(maint_list)
             df_m['Cost'] = df_m['Cost'].apply(format_egp)
             st.dataframe(df_m, use_container_width=True)
-        else: st.info("No maintenance records.")
+        else: st.info("No records.")
     with t3:
         if exp_list:
             df_e = pd.DataFrame(exp_list)
             df_e['Cost'] = df_e['Cost'].apply(format_egp)
             st.dataframe(df_e, use_container_width=True)
-        else: st.info("No other expenses.")
+        else: st.info("No expenses.")
 
 # --- 7. MODULE 3: FINANCIAL HQ ---
 def show_financial_hq(dfs):
@@ -424,12 +451,11 @@ def show_financial_hq(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
-    with st.expander("🗓️ Financial Period Settings", expanded=True):
+    with st.expander("🗓️ Financial Settings", expanded=False):
         f1, f2 = st.columns(2)
         sel_year = f1.selectbox("Fiscal Year", [2024, 2025, 2026], index=2, key='fin_y')
         sel_month = f2.selectbox("Fiscal Month", range(1, 13), index=0, key='fin_m')
 
-    # DATA PROCESSING
     inflow_data, total_cash_in = [], 0.0
     col_coll_amt = get_col_by_letter(df_coll, 'R')
     col_coll_order = get_col_by_letter(df_coll, 'L')
@@ -494,7 +520,6 @@ def show_financial_hq(dfs):
                         owner_deductible_expenses.append({'Car': car_c, 'Amount': amt})
             except: continue
     
-    # Calculate Total Owner Payouts for P&L Chart
     total_owner_payouts = 0.0
     col_car_code = get_col_by_letter(df_cars, 'A')
     col_status = get_col_by_letter(df_cars, 'AZ')
@@ -512,17 +537,17 @@ def show_financial_hq(dfs):
             total_owner_payouts += (monthly_gross - ops_fee - maint_deduction)
         except: continue
 
-    # TABS
-    tab1, tab2, tab3 = st.tabs(["🌊 Cash Flow", "📉 P&L (Detailed)", "🤝 Owner Ledger"])
+    tab1, tab2, tab3 = st.tabs(["🌊 Cash Flow", "📉 P&L", "🤝 Ledger"])
 
     with tab1:
         net_cash = total_cash_in - total_cash_out
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Cash In", format_egp(total_cash_in), "Collections")
-        c2.metric("Total Cash Out", format_egp(total_cash_out), "-Expenses", delta_color="inverse")
-        c3.metric("Net Liquidity", format_egp(net_cash), "Available Cash")
+        c1.metric("Cash In", format_egp(total_cash_in))
+        c2.metric("Cash Out", format_egp(total_cash_out), delta_color="inverse")
+        c3.metric("Net Liquidity", format_egp(net_cash))
         
         fig_water = go.Figure(go.Waterfall(measure = ["relative", "relative", "total"], x = ["In", "Out", "Net"], y = [total_cash_in, -total_cash_out, 0]))
+        fig_water.update_layout(height=350, margin=dict(t=20, b=20))
         st.plotly_chart(fig_water, use_container_width=True)
 
     with tab2:
@@ -536,23 +561,20 @@ def show_financial_hq(dfs):
         k3.metric("Owner Payouts", format_egp(total_owner_payouts), delta_color="inverse")
         k4.metric("Net Profit", format_egp(real_profit), f"{margin:.1f}% Margin")
 
-        # BREAKDOWN CHARTS
         b1, b2 = st.columns(2)
         with b1:
-            # Expense Composition
             fig_pie = px.pie(names=["Op. Expenses", "Owner Payouts", "Net Profit"], 
                              values=[total_cash_out, total_owner_payouts, max(0, real_profit)],
-                             title="Profit Distribution", hole=0.4,
-                             color_discrete_sequence=px.colors.qualitative.Pastel)
+                             hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig_pie.update_layout(height=350, margin=dict(t=20, b=20))
             st.plotly_chart(fig_pie, use_container_width=True)
         
         with b2:
-             # Revenue vs Cost Bar
              fig_bar = go.Figure(data=[
                  go.Bar(name='Revenue', x=['P&L'], y=[real_revenue], marker_color='#2ecc71'),
                  go.Bar(name='Expenses', x=['P&L'], y=[total_cash_out + total_owner_payouts], marker_color='#e74c3c')
              ])
-             fig_bar.update_layout(title="Revenue vs Costs", barmode='group')
+             fig_bar.update_layout(barmode='group', height=350, margin=dict(t=20, b=20))
              st.plotly_chart(fig_bar, use_container_width=True)
 
     with tab3:
