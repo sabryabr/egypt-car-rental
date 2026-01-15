@@ -262,7 +262,7 @@ def show_operations(dfs):
         st.plotly_chart(fig, use_container_width=True)
     else: st.warning("No fleet.")
 
-# --- 6. MODULE 2: VEHICLE 360 (FIXED CRASH) ---
+# --- 6. MODULE 2: VEHICLE 360 ---
 def show_vehicle_360(dfs):
     st.title("🚗 Vehicle 360")
     if not dfs: return
@@ -364,27 +364,17 @@ def show_vehicle_360(dfs):
     k4.metric("Yield", format_egp(total_revenue - total_maint - total_exp))
     
     t1, t2, t3 = st.tabs(["Trips", "Maint.", "Exp."])
-    
-    # FIXED: Replaced one-liners with if/else to prevent SyntaxError/AST crashes
     with t1:
-        if trips_data:
-            st.dataframe(pd.DataFrame(trips_data), use_container_width=True)
-        else:
-            st.info("Empty")
-    
+        if trips_data: st.dataframe(pd.DataFrame(trips_data), use_container_width=True)
+        else: st.info("Empty")
     with t2:
-        if maint_list:
-            st.dataframe(pd.DataFrame(maint_list), use_container_width=True)
-        else:
-            st.info("Empty")
-            
+        if maint_list: st.dataframe(pd.DataFrame(maint_list), use_container_width=True)
+        else: st.info("Empty")
     with t3:
-        if exp_list:
-            st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
-        else:
-            st.info("Empty")
+        if exp_list: st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
+        else: st.info("Empty")
 
-# --- 7. MODULE 3: CRM (FIXED COLUMNS) ---
+# --- 7. MODULE 3: CRM (FIXED COLUMNS B/C/D) ---
 def show_crm(dfs):
     st.title("👥 CRM")
     if not dfs: return
@@ -410,17 +400,19 @@ def show_crm(dfs):
     client_id_map = {} 
     client_db = {}
     
-    # UPDATED: Last Name is now Column D (was C)
+    # CORRECTED MAPPING:
+    # Column A: ID
+    # Column B: Last Name
+    # Column C: First Name
     col_cl_id = get_col_by_letter(df_clients, 'A')
-    col_cl_first = get_col_by_letter(df_clients, 'B')
-    col_cl_last = get_col_by_letter(df_clients, 'D') # SHIFTED HERE
+    col_cl_last = get_col_by_letter(df_clients, 'B') # Last Name
+    col_cl_first = get_col_by_letter(df_clients, 'C') # First Name
     
     if col_cl_id:
         for _, row in df_clients.iterrows():
             try:
                 cid = clean_client_code(row[col_cl_id])
                 
-                # Check for None values before joining
                 fname = str(row[col_cl_first]) if pd.notnull(row[col_cl_first]) else ""
                 lname = str(row[col_cl_last]) if pd.notnull(row[col_cl_last]) else ""
                 full_name = f"{fname} {lname}".strip()
@@ -694,27 +686,26 @@ def show_financial_hq(dfs):
             st.dataframe(df_l.style.applymap(lambda v: 'color: red' if 'EGP' in str(v) and float(str(v).replace(' EGP','').replace(',','').replace('k','000').replace('M','000000')) > 100 else 'color: white'), use_container_width=True, height=400)
         else: st.info("No Active Contracts")
 
-# --- 9. MODULE 5: RISK RADAR (SEPARATED) ---
+# --- 9. MODULE 5: RISK RADAR (TIME BUCKETS) ---
 def show_risk_radar(dfs):
     st.title("⚠️ Risk Radar")
     if not dfs: return
     
     df_cars = dfs['cars']
     today = datetime.now()
-    LIMIT_URGENT = 30
-    LIMIT_WARN = 60
     
-    # Lists for separated tabs
-    risks_lic, risks_ins, risks_con = [], [], []
+    # Buckets: 0-3m, 3-6m, 6-12m
+    # Days approx: 90, 180, 365
     
-    # Columns
-    col_lic_end = get_col_by_letter(df_cars, 'AT') # License
-    col_ins_end = get_col_by_letter(df_cars, 'BK') # Insurance
-    col_con_end = get_col_by_letter(df_cars, 'BC') # Contract
+    col_lic_end = get_col_by_letter(df_cars, 'AT')
+    col_ins_end = get_col_by_letter(df_cars, 'BK')
+    col_con_end = get_col_by_letter(df_cars, 'BC')
     col_name = get_col_by_letter(df_cars, 'B')
     col_model = get_col_by_letter(df_cars, 'E')
     col_status = get_col_by_letter(df_cars, 'AZ')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
+
+    risks = {'License': [], 'Insurance': [], 'Contract': []}
 
     for _, row in df_cars.iterrows():
         try:
@@ -722,44 +713,56 @@ def show_risk_radar(dfs):
             cname = f"{row[col_name]} {row[col_model]}"
             plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])]).strip()
             
-            # Helper to check date
-            def check(col, lst):
+            def check(col, cat):
                 if col:
                     d = pd.to_datetime(row[col], errors='coerce')
                     if pd.notnull(d):
                         days = (d - today).days
-                        if days < LIMIT_WARN:
-                            lst.append({'Car': cname, 'Plate': plate, 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Status': 'Urgent' if days < LIMIT_URGENT else 'Warning'})
+                        status = "Safe"
+                        if days <= 90: status = "Critical (0-3 Months)"
+                        elif days <= 180: status = "Warning (3-6 Months)"
+                        elif days <= 365: status = "Watchlist (6-12 Months)"
+                        
+                        if status != "Safe":
+                            risks[cat].append({'Car': cname, 'Plate': plate, 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Bucket': status})
 
-            check(col_lic_end, risks_lic)
-            check(col_ins_end, risks_ins)
-            check(col_con_end, risks_con)
+            check(col_lic_end, 'License')
+            check(col_ins_end, 'Insurance')
+            check(col_con_end, 'Contract')
 
         except: continue
 
-    # Styling function
-    def highlight_risk(row):
-        return ['background-color: #3e1f1f' if row['Status'] == 'Urgent' else 'background-color: #3e331f'] * len(row)
-
-    t1, t2, t3 = st.tabs(["📄 License", "🛡️ Insurance", "📝 Contracts"])
+    # UI Construction
+    t1, t2, t3 = st.tabs(["📄 License", "🛡️ Insurance", "📝 Contract"])
     
-    with t1:
-        if risks_lic:
-            df = pd.DataFrame(risks_lic).sort_values('Days')
-            st.dataframe(df.style.apply(highlight_risk, axis=1), use_container_width=True, hide_index=True)
-        else: st.success("No License Issues")
+    def render_tab(category):
+        items = risks[category]
+        if not items:
+            st.success("✅ No upcoming risks.")
+            return
+            
+        df = pd.DataFrame(items)
         
-    with t2:
-        if risks_ins:
-            df = pd.DataFrame(risks_ins).sort_values('Days')
-            st.dataframe(df.style.apply(highlight_risk, axis=1), use_container_width=True, hide_index=True)
-        else: st.success("No Insurance Issues")
+        # Split by Bucket
+        b1 = df[df['Bucket'] == "Critical (0-3 Months)"]
+        b2 = df[df['Bucket'] == "Warning (3-6 Months)"]
+        b3 = df[df['Bucket'] == "Watchlist (6-12 Months)"]
         
-    with t3:
-        if risks_con:
-            df = pd.DataFrame(risks_con).sort_values('Days')
-            st.dataframe(df.style.apply(highlight_risk, axis=1), use_container_width=True, hide_index=True)
-        else: st.success("No Contract Issues")
+        with st.expander(f"🚨 Critical (0-3 Months) [{len(b1)}]", expanded=True):
+            if not b1.empty: st.dataframe(b1.drop(columns=['Bucket']), use_container_width=True)
+            else: st.info("None")
+            
+        with st.expander(f"⚠️ Warning (3-6 Months) [{len(b2)}]", expanded=False):
+            if not b2.empty: st.dataframe(b2.drop(columns=['Bucket']), use_container_width=True)
+            else: st.info("None")
+            
+        with st.expander(f"👀 Watchlist (6-12 Months) [{len(b3)}]", expanded=False):
+            if not b3.empty: st.dataframe(b3.drop(columns=['Bucket']), use_container_width=True)
+            else: st.info("None")
+
+    with t1: render_tab('License')
+    with t2: render_tab('Insurance')
+    with t3: render_tab('Contract')
 
 # --- 10. NAV ---
 st.sidebar.title("🚘 Rental OS")
