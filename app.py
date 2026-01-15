@@ -145,7 +145,7 @@ def get_date_filter_range(period_type, year, specifier):
         _, last_day = calendar.monthrange(year, specifier)
         return datetime(year, specifier, 1), datetime(year, specifier, last_day, 23, 59, 59)
 
-# --- 6. MODULE 1: OPERATIONS (FIXED: SHOWS ALL ACTIVE CARS) ---
+# --- 6. MODULE 1: OPERATIONS (FIXED: FORCE SHOW ALL ACTIVE CARS) ---
 def show_operations(dfs):
     st.title("🏠 Operations Command Center")
     if not dfs: return
@@ -185,9 +185,9 @@ def show_operations(dfs):
         # 1. CLEAN: Remove empty rows
         valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
         
-        # 2. FILTER: Expanded Logic to catch "Active"
+        # 2. FILTER: Status
         if fleet_status == "Active Only":
-            # Now checks for 'Valid', 'Active', 'ساري', 'valid'
+            # Match 'Valid', 'Active', 'ساري'
             cars_subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
         elif fleet_status == "Inactive Only":
             cars_subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
@@ -196,7 +196,7 @@ def show_operations(dfs):
 
         active_fleet_count = len(cars_subset)
         
-        # 3. MAP: Build the list of visible cars
+        # 3. MAP: Build list
         for _, row in cars_subset.iterrows(): 
             try:
                 c_id = clean_id_tag(row[col_code])
@@ -207,7 +207,8 @@ def show_operations(dfs):
                     val = row[get_col_by_letter(df_cars, p)]
                     if pd.notnull(val): plate += str(val) + " "
                 
-                car_map[c_id] = f"[{row[col_code]}] {c_name} | {plate.strip()}"
+                # Format: "Name | Plate" (Clean look)
+                car_map[c_id] = f"{c_name} | {plate.strip()}"
             except: continue
 
     # --- C. PROCESS ORDERS ---
@@ -230,18 +231,18 @@ def show_operations(dfs):
                 
                 if pd.isna(s_date) or pd.isna(e_date): continue
                 
-                # Date Range Check
+                # Filter Range
                 if not (s_date <= end_range and e_date >= start_range):
                     continue
 
                 raw_car_id = row[col_car_ord]
                 car_id_clean = clean_id_tag(raw_car_id)
                 
+                # STRICT FILTER: Only show orders for visible cars
                 if car_id_clean not in car_map: continue
                 
                 car_name = car_map[car_id_clean]
 
-                # Status Logic
                 status = 'Completed'
                 if s_date <= today <= e_date: 
                     status = 'Active'
@@ -271,16 +272,23 @@ def show_operations(dfs):
     st.divider()
     st.subheader(f"📅 Fleet Schedule ({period_type} View)")
     
-    # --- CHART GENERATION (FIXED TO SHOW EMPTY CARS) ---
-    all_car_names = sorted(list(car_map.values())) # List of ALL active cars
+    # --- CHART LOGIC (FORCE ALL CARS) ---
+    all_car_names = sorted(list(car_map.values())) # List of ALL active cars names
     
-    if timeline_data or all_car_names: # Render if we have cars, even without trips
+    # 1. Create Base DataFrame from Orders
+    if timeline_data:
         df_timeline = pd.DataFrame(timeline_data)
-        
-        # If df_timeline is empty (no trips), create a dummy empty dataframe with columns
-        if df_timeline.empty:
-            df_timeline = pd.DataFrame(columns=['Car', 'Start', 'End', 'Status', 'Client'])
+    else:
+        df_timeline = pd.DataFrame(columns=['Car', 'Start', 'End', 'Status', 'Client'])
 
+    # 2. Add "Ghost" Rows for cars with NO orders (to force them onto the chart)
+    # We add a dummy row with NaT dates so it doesn't draw a bar, but registers the Y-axis category
+    for car_name in all_car_names:
+        if car_name not in df_timeline['Car'].values:
+            new_row = pd.DataFrame([{'Car': car_name, 'Start': pd.NaT, 'End': pd.NaT, 'Status': 'Active', 'Client': ''}])
+            df_timeline = pd.concat([df_timeline, new_row], ignore_index=True)
+
+    if not df_timeline.empty:
         color_map = {
             "Active": "#00C853",   # Green
             "Future": "#9b59b6",   # Purple
@@ -294,25 +302,25 @@ def show_operations(dfs):
             hover_data=["Client"]
         )
         
-        # FORCE Y-AXIS TO SHOW ALL CARS
+        # 3. Explicitly Order Y-Axis
         fig.update_yaxes(
             autorange="reversed", 
             categoryorder='array', 
-            categoryarray=all_car_names,
-            type='category'
+            categoryarray=all_car_names, # Forces strict order matching our list
+            type='category' # Ensures no numeric assumptions
         )
         
         fig.update_layout(
-            # Dynamic Height: 40px per car + buffer
-            height=max(400, len(all_car_names) * 40), 
+            height=max(500, len(all_car_names) * 50), # Increased height per car
             plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
             font=dict(color="white"),
             xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]),
+            margin=dict(l=10, r=10, t=10, b=10)
         )
         fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
         st.plotly_chart(fig, use_container_width=True)
     else: 
-        st.warning("No active fleet found. Please check column AZ for 'Valid' or 'Active'.")
+        st.warning("No cars found.")
 
 # --- 7. MODULE 2: VEHICLE 360 ---
 def show_vehicle_360(dfs):
