@@ -13,22 +13,22 @@ import calendar
 # --- 1. APP CONFIGURATION ---
 st.set_page_config(page_title="Egypt Rental OS 3.0", layout="wide", page_icon="🚘", initial_sidebar_state="auto")
 
-# --- 2. MOBILE RESPONSIVE CSS ---
+# --- 2. ULTRA-COMPACT CSS ---
 st.markdown("""
 <style>
     .main { direction: rtl; font-family: 'Cairo', sans-serif; background-color: #0e1117; color: white; }
     .block-container { padding-top: 0.5rem !important; padding-bottom: 3rem !important; }
     [data-testid="stSidebar"] { background-color: #1e2530; color: white; }
     
-    /* Responsive Metrics */
+    /* Metrics */
     div[data-testid="metric-container"] {
         background-color: #262730; border: 1px solid #464b5d; border-radius: 6px; padding: 5px 10px; 
         color: white; height: auto; min-height: 70px; overflow: hidden;
     }
-    label[data-testid="stMetricLabel"] { font-size: 0.8rem !important; margin-bottom: 0 !important; }
-    div[data-testid="stMetricValue"] { font-size: 1.2rem !important; }
+    label[data-testid="stMetricLabel"] { font-size: 0.75rem !important; margin-bottom: 0 !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.1rem !important; }
     
-    /* Compact Elements */
+    /* Tables & Elements */
     .stDataFrame { direction: ltr; font-size: 0.8rem; }
     div[data-testid="stExpander"] { border: 1px solid #464b5d; border-radius: 4px; }
     .stTabs [data-baseweb="tab-list"] { gap: 2px; margin-bottom: 0.5rem; flex-wrap: wrap; }
@@ -36,11 +36,10 @@ st.markdown("""
     h1 { font-size: 1.4rem !important; margin-bottom: 0.2rem !important; }
     h3 { font-size: 1.1rem !important; margin-top: 0.5rem !important; }
     
-    /* Mobile Adjustments */
+    /* Mobile */
     @media (max-width: 640px) {
         div[data-testid="column"] { width: 100% !important; flex: 1 1 auto !important; min-width: 100px !important; }
         .stTabs [data-baseweb="tab"] { font-size: 0.75rem; padding: 0 5px; }
-        div[data-testid="metric-container"] { margin-bottom: 10px; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -232,7 +231,6 @@ def show_operations(dfs):
 
     utilization = (active_rentals / active_fleet_count * 100) if active_fleet_count > 0 else 0.0
 
-    # Responsive Grid for Metrics
     c1, c2 = st.columns(2)
     c1.metric("Live", active_rentals)
     c2.metric("Future", future_orders)
@@ -370,68 +368,148 @@ def show_vehicle_360(dfs):
     with t2: st.dataframe(pd.DataFrame(maint_list), use_container_width=True) if maint_list else st.info("Empty")
     with t3: st.dataframe(pd.DataFrame(exp_list), use_container_width=True) if exp_list else st.info("Empty")
 
-# --- 7. MODULE 3: CRM ---
+# --- 7. MODULE 3: CRM (UPDATED: CLIENTS SHEET & DETAIL VIEW) ---
 def show_crm(dfs):
     st.title("👥 CRM")
     if not dfs: return
     
     df_orders = dfs['orders']
-    client_stats = {} 
-    col_name = get_col_by_letter(df_orders, 'B')
-    col_cost = get_col_by_letter(df_orders, 'AE')
-    col_date = get_col_by_letter(df_orders, 'L')
-    col_car = get_col_by_letter(df_orders, 'C')
+    df_clients = dfs['clients'] 
+    df_cars = dfs['cars']
 
-    if col_name:
-        for _, row in df_orders.iterrows():
+    # --- 1. Map Cars for nice display ---
+    car_display_map = {}
+    col_code = get_col_by_letter(df_cars, 'A')
+    col_plate = get_col_by_letter(df_cars, 'AC') 
+    plate_cols = ['AC','AB','AA','Z','Y','X','W']
+    if col_code:
+        for _, row in df_cars.iterrows():
             try:
-                name = str(row[col_name]).strip()
-                if not name or name == "nan": continue
-                amt = clean_currency(row[col_cost])
-                d = pd.to_datetime(row[col_date], errors='coerce')
-                if name not in client_stats: client_stats[name] = {'Spend': 0, 'Trips': 0, 'Last': pd.Timestamp.min, 'Cars': []}
-                client_stats[name]['Spend'] += amt
-                client_stats[name]['Trips'] += 1
-                client_stats[name]['Cars'].append(str(row[col_car]))
+                cid = clean_id_tag(row[col_code])
+                cname = f"{row[get_col_by_letter(df_cars, 'B')]} {row[get_col_by_letter(df_cars, 'E')]}"
+                plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
+                car_display_map[cid] = f"{cname} ({plate.strip()})"
             except: continue
 
-    search = st.text_input("🔍 Search Client (Name)", "")
-    df_crm = pd.DataFrame.from_dict(client_stats, orient='index').reset_index().rename(columns={'index':'Name'})
+    # --- 2. Build Client DB from Clients Sheet + Orders ---
+    client_db = {}
+    
+    # Load Basic Info from Clients Sheet (Cols A, B, C)
+    col_cl_id = get_col_by_letter(df_clients, 'A')
+    col_cl_first = get_col_by_letter(df_clients, 'B')
+    col_cl_last = get_col_by_letter(df_clients, 'C')
+    
+    if col_cl_id:
+        for _, row in df_clients.iterrows():
+            try:
+                full_name = f"{row[col_cl_first]} {row[col_cl_last]}".strip()
+                if not full_name: continue
+                # Key by Name to match orders
+                client_db[full_name] = {
+                    'Code': row[col_cl_id], 
+                    'Name': full_name, 
+                    'Spend': 0, 'Trips': 0, 
+                    'History': []
+                }
+            except: continue
+
+    # Merge Orders Data
+    col_ord_name = get_col_by_letter(df_orders, 'B')
+    col_ord_cost = get_col_by_letter(df_orders, 'AE')
+    col_ord_s = get_col_by_letter(df_orders, 'L')
+    col_ord_e = get_col_by_letter(df_orders, 'V')
+    col_ord_car = get_col_by_letter(df_orders, 'C')
+    col_ord_id = get_col_by_letter(df_orders, 'A')
+
+    if col_ord_name:
+        for _, row in df_orders.iterrows():
+            try:
+                name = str(row[col_ord_name]).strip()
+                if not name or name == "nan": continue
+                
+                # If client not in DB (from Clients sheet), create entry
+                if name not in client_db:
+                    client_db[name] = {'Code': 'N/A', 'Name': name, 'Spend': 0, 'Trips': 0, 'History': []}
+                
+                amt = clean_currency(row[col_ord_cost])
+                s = pd.to_datetime(row[col_ord_s], errors='coerce')
+                e = pd.to_datetime(row[col_ord_e], errors='coerce')
+                cid = clean_id_tag(row[col_ord_car])
+                car_label = car_display_map.get(cid, f"Car {cid}")
+                
+                status = "Completed"
+                if pd.notnull(s) and pd.notnull(e):
+                    if s <= datetime.now() <= e: status = "Active"
+                    elif s > datetime.now(): status = "Future"
+                
+                client_db[name]['Spend'] += amt
+                client_db[name]['Trips'] += 1
+                
+                client_db[name]['History'].append({
+                    "Order ID": row[col_ord_id],
+                    "Car": car_label,
+                    "Start": s.strftime("%Y-%m-%d") if pd.notnull(s) else "-",
+                    "End": e.strftime("%Y-%m-%d") if pd.notnull(e) else "-",
+                    "Days": (e - s).days if pd.notnull(s) and pd.notnull(e) else 0,
+                    "Cost": format_egp(amt),
+                    "Status": status
+                })
+            except: continue
+
+    # --- UI ---
+    search = st.text_input("🔍 Search Client", "")
+    
+    df_crm = pd.DataFrame.from_dict(client_db, orient='index')
     if not df_crm.empty:
         df_crm = df_crm.sort_values('Spend', ascending=False)
-        if search: df_crm = df_crm[df_crm['Name'].str.contains(search, case=False, na=False)]
+        if search: 
+            df_crm = df_crm[df_crm['Name'].str.contains(search, case=False, na=False)]
 
+        # Top Stats
         c1, c2, c3 = st.columns(3)
-        c1.metric("Clients", len(client_stats))
-        c2.metric("Top", df_crm.iloc[0]['Name'] if not df_crm.empty else "-")
+        c1.metric("Total Clients", len(client_db))
+        c2.metric("Top Spender", df_crm.iloc[0]['Name'] if not df_crm.empty else "-")
         c3.metric("Avg LTV", format_egp(df_crm['Spend'].mean()))
 
         st.divider()
-        st.markdown("### Client List")
-        selected_client = st.dataframe(df_crm[['Name', 'Spend', 'Trips']], use_container_width=True, height=300, on_select="rerun", selection_mode="single-row")
         
-        sel_idx = selected_client.selection.rows
-        if sel_idx:
-            client_row = df_crm.iloc[sel_idx[0]]
-            name = client_row['Name']
-            stats = client_stats[name]
-            st.info(f"**{name}** | Spend: {format_egp(stats['Spend'])} | Trips: {stats['Trips']}")
+        col_list, col_detail = st.columns([1, 2])
+        
+        with col_list:
+            st.subheader("Client List")
+            # Formatting List for Display
+            display_df = df_crm[['Code', 'Name', 'Spend', 'Trips']].copy()
+            display_df['Spend'] = display_df['Spend'].apply(format_egp)
             
-            # Simple Timeline
-            client_orders = df_orders[df_orders[col_name] == name]
-            timeline_data = []
-            for _, r in client_orders.iterrows():
-                 s = pd.to_datetime(r[get_col_by_letter(df_orders, 'L')], errors='coerce')
-                 e = pd.to_datetime(r[get_col_by_letter(df_orders, 'V')], errors='coerce')
-                 if pd.notnull(s) and pd.notnull(e):
-                     timeline_data.append({'Start': s, 'End': e, 'Car': str(r[col_car]), 'Cost': clean_currency(r[col_cost])})
-            
-            if timeline_data:
-                df_t = pd.DataFrame(timeline_data)
-                fig = px.timeline(df_t, x_start="Start", x_end="End", y="Car", color="Cost")
-                fig.update_yaxes(autorange="reversed")
-                fig.update_layout(height=250, margin=dict(t=20, b=10, l=10, r=10), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"))
-                st.plotly_chart(fig, use_container_width=True)
+            selection = st.dataframe(
+                display_df, 
+                use_container_width=True, 
+                height=500, 
+                on_select="rerun", 
+                selection_mode="single-row",
+                hide_index=True
+            )
+        
+        with col_detail:
+            st.subheader("Client History")
+            sel_idx = selection.selection.rows
+            if sel_idx:
+                # Get the actual client name from the sorted/filtered dataframe
+                client_name = display_df.iloc[sel_idx[0]]['Name']
+                client_data = client_db[client_name]
+                
+                # Profile Header
+                vip_badge = "🏆 VIP" if client_data['Spend'] > 50000 else "👤 Regular"
+                st.info(f"**{client_name}** ({client_data['Code']}) | {vip_badge} | Total: {format_egp(client_data['Spend'])}")
+                
+                # Detailed History Table
+                if client_data['History']:
+                    hist_df = pd.DataFrame(client_data['History'])
+                    st.dataframe(hist_df, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("No rental history found for this client.")
+            else:
+                st.info("👈 Select a client to view full details.")
 
 # --- 8. MODULE 4: FINANCIAL HQ ---
 def show_financial_hq(dfs):
