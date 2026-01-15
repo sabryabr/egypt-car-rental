@@ -400,10 +400,9 @@ def show_crm(dfs):
     client_id_map = {} 
     client_db = {}
     
-    # MAPPING: ID=A, First=C, Last=D
     col_cl_id = get_col_by_letter(df_clients, 'A')
-    col_cl_first = get_col_by_letter(df_clients, 'C') 
-    col_cl_last = get_col_by_letter(df_clients, 'D')
+    col_cl_first = get_col_by_letter(df_clients, 'C') # First Name = C
+    col_cl_last = get_col_by_letter(df_clients, 'D')  # Last Name = D
     
     if col_cl_id:
         for _, row in df_clients.iterrows():
@@ -683,7 +682,7 @@ def show_financial_hq(dfs):
             st.dataframe(df_l.style.applymap(lambda v: 'color: red' if 'EGP' in str(v) and float(str(v).replace(' EGP','').replace(',','').replace('k','000').replace('M','000000')) > 100 else 'color: white'), use_container_width=True, height=400)
         else: st.info("No Active Contracts")
 
-# --- 9. MODULE 5: RISK RADAR (3-TIER BUCKETS) ---
+# --- 9. MODULE 5: RISK RADAR (3 BUCKETS & INSURANCE LOGIC) ---
 def show_risk_radar(dfs):
     st.title("⚠️ Risk Radar")
     if not dfs: return
@@ -691,19 +690,23 @@ def show_risk_radar(dfs):
     df_cars = dfs['cars']
     today = datetime.now()
     
-    # Updated Columns (Dual Check for License)
+    # 0-3m (0-90), 3-6m (90-180), 6-12m (180-365)
+    
+    risks = {'License': [], 'Insurance': [], 'Contract': []}
+    
     col_lic_end = get_col_by_letter(df_cars, 'AQ') 
     col_exam_end = get_col_by_letter(df_cars, 'BD')
     col_lic_status = get_col_by_letter(df_cars, 'AT')
     
-    col_ins_end = get_col_by_letter(df_cars, 'BK')
+    # Updated Insurance Columns
+    col_ins_end = get_col_by_letter(df_cars, 'BJ')
+    col_ins_status = get_col_by_letter(df_cars, 'BN')
+    
     col_con_end = get_col_by_letter(df_cars, 'BC')
     col_name = get_col_by_letter(df_cars, 'B')
     col_model = get_col_by_letter(df_cars, 'E')
     col_status = get_col_by_letter(df_cars, 'AZ')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
-
-    risks = {'License': [], 'Insurance': [], 'Contract': []}
 
     for _, row in df_cars.iterrows():
         try:
@@ -711,61 +714,56 @@ def show_risk_radar(dfs):
             cname = f"{row[col_name]} {row[col_model]}"
             plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])]).strip()
             
-            # --- LICENSE LOGIC (Dual) ---
+            # --- LICENSE (Dual) ---
             lic_valid = True
             if col_lic_status: lic_valid = any(x in str(row[col_lic_status]) for x in ['Valid', 'Active', 'ساري'])
             
             if lic_valid:
                 d_lic = pd.to_datetime(row[col_lic_end], errors='coerce') if col_lic_end else None
                 d_exam = pd.to_datetime(row[col_exam_end], errors='coerce') if col_exam_end else None
+                target, reason = None, "License"
                 
-                target_date = None
-                reason = "License"
-                
-                # Logic: If dates equal -> "License + Examination". Else take earliest.
                 if d_lic and d_exam:
-                    if d_lic == d_exam:
-                        target_date = d_lic
-                        reason = "License + Examination"
-                    elif d_lic < d_exam:
-                        target_date = d_lic
-                        reason = "License"
-                    else:
-                        target_date = d_exam
-                        reason = "Examination"
-                elif d_lic:
-                    target_date = d_lic
-                    reason = "License"
-                elif d_exam:
-                    target_date = d_exam
-                    reason = "Examination"
+                    if d_lic == d_exam: target, reason = d_lic, "License + Examination"
+                    elif d_lic < d_exam: target, reason = d_lic, "License"
+                    else: target, reason = d_exam, "Examination"
+                elif d_lic: target, reason = d_lic, "License"
+                elif d_exam: target, reason = d_exam, "Examination"
                 
-                if target_date:
-                    days = (target_date - today).days
+                if target:
+                    days = (target - today).days
                     bucket = None
-                    if days <= 90: bucket = "High Risk (0-3 Months)"
-                    elif days <= 180: bucket = "Medium Risk (3-6 Months)"
-                    elif days > 180: bucket = "Low Risk (> 6 Months)"
-                    
-                    if bucket:
-                        risks['License'].append({'Car': cname, 'Plate': plate, 'Type': reason, 'Due': target_date.strftime("%Y-%m-%d"), 'Bucket': bucket, 'Days': days})
+                    if days <= 90: bucket = "Critical (0-3 Months)"
+                    elif days <= 180: bucket = "Warning (3-6 Months)"
+                    elif days > 180: bucket = "Watchlist (6-12 Months)"
+                    if bucket: risks['License'].append({'Car': cname, 'Plate': plate, 'Type': reason, 'Due': target.strftime("%Y-%m-%d"), 'Bucket': bucket, 'Days': days})
 
-            # --- STANDARD CHECK ---
-            def check(col, cat):
-                if col:
-                    d = pd.to_datetime(row[col], errors='coerce')
-                    if pd.notnull(d):
-                        days = (d - today).days
-                        bucket = None
-                        if days <= 90: bucket = "High Risk (0-3 Months)"
-                        elif days <= 180: bucket = "Medium Risk (3-6 Months)"
-                        elif days > 180: bucket = "Low Risk (> 6 Months)"
-                        
-                        if bucket:
-                            risks[cat].append({'Car': cname, 'Plate': plate, 'Due': d.strftime("%Y-%m-%d"), 'Bucket': bucket, 'Days': days})
+            # --- INSURANCE (Check if Exists) ---
+            has_ins = False
+            if col_ins_status:
+                s_val = str(row[col_ins_status]).lower()
+                if "yes" in s_val or "يوجد" in s_val: has_ins = True
+            
+            if has_ins and col_ins_end:
+                d = pd.to_datetime(row[col_ins_end], errors='coerce')
+                if pd.notnull(d):
+                    days = (d - today).days
+                    bucket = None
+                    if days <= 90: bucket = "Critical (0-3 Months)"
+                    elif days <= 180: bucket = "Warning (3-6 Months)"
+                    elif days > 180: bucket = "Watchlist (6-12 Months)"
+                    if bucket: risks['Insurance'].append({'Car': cname, 'Plate': plate, 'Due': d.strftime("%Y-%m-%d"), 'Bucket': bucket, 'Days': days})
 
-            check(col_ins_end, 'Insurance')
-            check(col_con_end, 'Contract')
+            # --- CONTRACT ---
+            if col_con_end:
+                d = pd.to_datetime(row[col_con_end], errors='coerce')
+                if pd.notnull(d):
+                    days = (d - today).days
+                    bucket = None
+                    if days <= 90: bucket = "Critical (0-3 Months)"
+                    elif days <= 180: bucket = "Warning (3-6 Months)"
+                    elif days > 180: bucket = "Watchlist (6-12 Months)"
+                    if bucket: risks['Contract'].append({'Car': cname, 'Plate': plate, 'Due': d.strftime("%Y-%m-%d"), 'Bucket': bucket, 'Days': days})
 
         except: continue
 
@@ -777,21 +775,21 @@ def show_risk_radar(dfs):
             st.success("✅ No upcoming risks.")
             return
             
-        df = pd.DataFrame(items).sort_values('Days') # Sorted by urgency
+        df = pd.DataFrame(items).sort_values('Days')
         
-        b1 = df[df['Bucket'] == "High Risk (0-3 Months)"]
-        b2 = df[df['Bucket'] == "Medium Risk (3-6 Months)"]
-        b3 = df[df['Bucket'] == "Low Risk (> 6 Months)"]
+        b1 = df[df['Bucket'] == "Critical (0-3 Months)"]
+        b2 = df[df['Bucket'] == "Warning (3-6 Months)"]
+        b3 = df[df['Bucket'] == "Watchlist (6-12 Months)"]
         
-        with st.expander(f"🔴 High Risk (0-3 Months) [{len(b1)}]", expanded=True):
+        with st.expander(f"🚨 Critical (0-3 Months) [{len(b1)}]", expanded=True):
             if not b1.empty: st.dataframe(b1.drop(columns=['Bucket', 'Days']), use_container_width=True)
             else: st.info("None")
             
-        with st.expander(f"🟡 Medium Risk (3-6 Months) [{len(b2)}]", expanded=False):
+        with st.expander(f"⚠️ Warning (3-6 Months) [{len(b2)}]", expanded=False):
             if not b2.empty: st.dataframe(b2.drop(columns=['Bucket', 'Days']), use_container_width=True)
             else: st.info("None")
             
-        with st.expander(f"🟢 Low Risk (> 6 Months) [{len(b3)}]", expanded=False):
+        with st.expander(f"👀 Watchlist (6-12 Months) [{len(b3)}]", expanded=False):
             if not b3.empty: st.dataframe(b3.drop(columns=['Bucket', 'Days']), use_container_width=True)
             else: st.info("None")
 
