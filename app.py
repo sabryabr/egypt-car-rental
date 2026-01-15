@@ -28,7 +28,7 @@ st.markdown("""
     label[data-testid="stMetricLabel"] { font-size: 0.75rem !important; margin-bottom: 0 !important; }
     div[data-testid="stMetricValue"] { font-size: 1.1rem !important; }
     
-    /* Tables & Elements */
+    /* Tables */
     .stDataFrame { direction: ltr; font-size: 0.8rem; }
     div[data-testid="stExpander"] { border: 1px solid #464b5d; border-radius: 4px; }
     .stTabs [data-baseweb="tab-list"] { gap: 2px; margin-bottom: 0.5rem; flex-wrap: wrap; }
@@ -368,7 +368,7 @@ def show_vehicle_360(dfs):
     with t2: st.dataframe(pd.DataFrame(maint_list), use_container_width=True) if maint_list else st.info("Empty")
     with t3: st.dataframe(pd.DataFrame(exp_list), use_container_width=True) if exp_list else st.info("Empty")
 
-# --- 7. MODULE 3: CRM (UPDATED: CLIENTS SHEET & DETAIL VIEW) ---
+# --- 7. MODULE 3: CRM (ENHANCED DETAIL VIEW) ---
 def show_crm(dfs):
     st.title("👥 CRM")
     if not dfs: return
@@ -377,10 +377,9 @@ def show_crm(dfs):
     df_clients = dfs['clients'] 
     df_cars = dfs['cars']
 
-    # --- 1. Map Cars for nice display ---
+    # --- A. Map Cars ---
     car_display_map = {}
     col_code = get_col_by_letter(df_cars, 'A')
-    col_plate = get_col_by_letter(df_cars, 'AC') 
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
     if col_code:
         for _, row in df_cars.iterrows():
@@ -388,13 +387,13 @@ def show_crm(dfs):
                 cid = clean_id_tag(row[col_code])
                 cname = f"{row[get_col_by_letter(df_cars, 'B')]} {row[get_col_by_letter(df_cars, 'E')]}"
                 plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
-                car_display_map[cid] = f"{cname} ({plate.strip()})"
+                car_display_map[cid] = f"{cname} | {plate.strip()}"
             except: continue
 
-    # --- 2. Build Client DB from Clients Sheet + Orders ---
+    # --- B. Build Client DB ---
     client_db = {}
     
-    # Load Basic Info from Clients Sheet (Cols A, B, C)
+    # 1. From Clients Sheet
     col_cl_id = get_col_by_letter(df_clients, 'A')
     col_cl_first = get_col_by_letter(df_clients, 'B')
     col_cl_last = get_col_by_letter(df_clients, 'C')
@@ -404,16 +403,17 @@ def show_crm(dfs):
             try:
                 full_name = f"{row[col_cl_first]} {row[col_cl_last]}".strip()
                 if not full_name: continue
-                # Key by Name to match orders
-                client_db[full_name] = {
-                    'Code': row[col_cl_id], 
+                # Normalize name for matching
+                norm_name = full_name.lower().strip()
+                client_db[norm_name] = {
+                    'Display': f"[{row[col_cl_id]}] {full_name}", 
                     'Name': full_name, 
                     'Spend': 0, 'Trips': 0, 
                     'History': []
                 }
             except: continue
 
-    # Merge Orders Data
+    # 2. Merge Orders
     col_ord_name = get_col_by_letter(df_orders, 'B')
     col_ord_cost = get_col_by_letter(df_orders, 'AE')
     col_ord_s = get_col_by_letter(df_orders, 'L')
@@ -424,34 +424,39 @@ def show_crm(dfs):
     if col_ord_name:
         for _, row in df_orders.iterrows():
             try:
-                name = str(row[col_ord_name]).strip()
-                if not name or name == "nan": continue
+                name_raw = str(row[col_ord_name]).strip()
+                if not name_raw or name_raw == "nan": continue
+                norm_name = name_raw.lower().strip()
                 
-                # If client not in DB (from Clients sheet), create entry
-                if name not in client_db:
-                    client_db[name] = {'Code': 'N/A', 'Name': name, 'Spend': 0, 'Trips': 0, 'History': []}
+                # Use DB entry or create temporary one if missing in Clients Sheet
+                if norm_name not in client_db:
+                    client_db[norm_name] = {'Display': f"[?] {name_raw}", 'Name': name_raw, 'Spend': 0, 'Trips': 0, 'History': []}
                 
+                rec = client_db[norm_name]
                 amt = clean_currency(row[col_ord_cost])
                 s = pd.to_datetime(row[col_ord_s], errors='coerce')
                 e = pd.to_datetime(row[col_ord_e], errors='coerce')
                 cid = clean_id_tag(row[col_ord_car])
-                car_label = car_display_map.get(cid, f"Car {cid}")
                 
                 status = "Completed"
+                days = 0
                 if pd.notnull(s) and pd.notnull(e):
+                    days = (e - s).days
                     if s <= datetime.now() <= e: status = "Active"
                     elif s > datetime.now(): status = "Future"
                 
-                client_db[name]['Spend'] += amt
-                client_db[name]['Trips'] += 1
+                daily_rate = (amt / days) if days > 0 else 0
                 
-                client_db[name]['History'].append({
+                rec['Spend'] += amt
+                rec['Trips'] += 1
+                rec['History'].append({
                     "Order ID": row[col_ord_id],
-                    "Car": car_label,
+                    "Car": car_display_map.get(cid, f"Unknown ({cid})"),
                     "Start": s.strftime("%Y-%m-%d") if pd.notnull(s) else "-",
                     "End": e.strftime("%Y-%m-%d") if pd.notnull(e) else "-",
-                    "Days": (e - s).days if pd.notnull(s) and pd.notnull(e) else 0,
+                    "Days": days,
                     "Cost": format_egp(amt),
+                    "Daily Rate": format_egp(daily_rate),
                     "Status": status
                 })
             except: continue
@@ -459,16 +464,22 @@ def show_crm(dfs):
     # --- UI ---
     search = st.text_input("🔍 Search Client", "")
     
-    df_crm = pd.DataFrame.from_dict(client_db, orient='index')
+    # Convert Dict to DF for display
+    data_list = []
+    for k, v in client_db.items():
+        data_list.append({'Display': v['Display'], 'Spend': v['Spend'], 'Trips': v['Trips'], 'Key': k})
+    
+    df_crm = pd.DataFrame(data_list)
+    
     if not df_crm.empty:
         df_crm = df_crm.sort_values('Spend', ascending=False)
         if search: 
-            df_crm = df_crm[df_crm['Name'].str.contains(search, case=False, na=False)]
+            df_crm = df_crm[df_crm['Display'].str.contains(search, case=False, na=False)]
 
         # Top Stats
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Clients", len(client_db))
-        c2.metric("Top Spender", df_crm.iloc[0]['Name'] if not df_crm.empty else "-")
+        c2.metric("Top Spender", df_crm.iloc[0]['Display'].split("] ")[1] if not df_crm.empty else "-")
         c3.metric("Avg LTV", format_egp(df_crm['Spend'].mean()))
 
         st.divider()
@@ -477,12 +488,12 @@ def show_crm(dfs):
         
         with col_list:
             st.subheader("Client List")
-            # Formatting List for Display
-            display_df = df_crm[['Code', 'Name', 'Spend', 'Trips']].copy()
-            display_df['Spend'] = display_df['Spend'].apply(format_egp)
+            # Format numbers for display
+            df_display = df_crm.copy()
+            df_display['Spend'] = df_display['Spend'].apply(format_egp)
             
             selection = st.dataframe(
-                display_df, 
+                df_display[['Display', 'Spend', 'Trips']], 
                 use_container_width=True, 
                 height=500, 
                 on_select="rerun", 
@@ -491,25 +502,30 @@ def show_crm(dfs):
             )
         
         with col_detail:
-            st.subheader("Client History")
+            st.subheader("History & Details")
             sel_idx = selection.selection.rows
             if sel_idx:
-                # Get the actual client name from the sorted/filtered dataframe
-                client_name = display_df.iloc[sel_idx[0]]['Name']
-                client_data = client_db[client_name]
+                # Retrieve Full Data
+                client_key = df_display.iloc[sel_idx[0]]['Key']
+                client_data = client_db[client_key]
                 
-                # Profile Header
-                vip_badge = "🏆 VIP" if client_data['Spend'] > 50000 else "👤 Regular"
-                st.info(f"**{client_name}** ({client_data['Code']}) | {vip_badge} | Total: {format_egp(client_data['Spend'])}")
+                # Header
+                st.info(f"**{client_data['Display']}**")
                 
-                # Detailed History Table
+                # Metrics
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Total Spend", format_egp(client_data['Spend']))
+                m2.metric("Total Trips", client_data['Trips'])
+                m3.metric("Avg Trip Cost", format_egp(client_data['Spend']/client_data['Trips']) if client_data['Trips']>0 else "0")
+                
+                # History Table
                 if client_data['History']:
                     hist_df = pd.DataFrame(client_data['History'])
                     st.dataframe(hist_df, use_container_width=True, hide_index=True)
                 else:
-                    st.warning("No rental history found for this client.")
+                    st.warning("No rental history found.")
             else:
-                st.info("👈 Select a client to view full details.")
+                st.info("👈 Select a client from the list.")
 
 # --- 8. MODULE 4: FINANCIAL HQ ---
 def show_financial_hq(dfs):
