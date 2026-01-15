@@ -8,6 +8,7 @@ import os
 import string
 import re
 from datetime import datetime, timedelta
+import calendar
 
 # --- 1. APP CONFIGURATION ---
 st.set_page_config(page_title="Egypt Rental OS 3.0", layout="wide", page_icon="🚘")
@@ -17,19 +18,11 @@ st.markdown("""
 <style>
     .main { direction: rtl; font-family: 'Cairo', sans-serif; background-color: #0e1117; color: white; }
     [data-testid="stSidebar"] { background-color: #1e2530; color: white; }
-    
-    /* Metrics */
     div[data-testid="metric-container"] {
-        background-color: #262730;
-        border: 1px solid #464b5d;
-        border-radius: 10px;
-        padding: 15px;
-        color: white;
+        background-color: #262730; border: 1px solid #464b5d; border-radius: 10px; padding: 15px; color: white;
     }
     label[data-testid="stMetricLabel"] { color: #b0b3b8 !important; }
     div[data-testid="stMetricValue"] { color: #ffffff !important; }
-    
-    /* Tables */
     .stDataFrame { direction: ltr; }
 </style>
 """, unsafe_allow_html=True)
@@ -126,26 +119,19 @@ def clean_currency(x):
 def format_egp(x):
     return f"{x:,.0f} EGP"
 
-# --- 5. FILTER HELPER ---
 def get_date_filter_range(period_type, year, specifier):
-    """Returns start and end datetime for Month/Quarter/Year"""
     if period_type == "Year":
         return datetime(year, 1, 1), datetime(year, 12, 31, 23, 59, 59)
     elif period_type == "Quarter":
         q_map = {1: (1, 3), 2: (4, 6), 3: (7, 9), 4: (10, 12)}
         s_m, e_m = q_map[specifier]
-        # End day logic
-        _, last_day =  (31 if e_m in [1,3,5,7,8,10,12] else 30, 31) # Simple approx, better to use calendar lib if strict
-        # Using calendar for robustness
-        import calendar
         _, last_day = calendar.monthrange(year, e_m)
         return datetime(year, s_m, 1), datetime(year, e_m, last_day, 23, 59, 59)
-    else: # Month
-        import calendar
+    else: 
         _, last_day = calendar.monthrange(year, specifier)
         return datetime(year, specifier, 1), datetime(year, specifier, last_day, 23, 59, 59)
 
-# --- 6. MODULE 1: OPERATIONS (FIXED: FORCE SHOW ALL ACTIVE CARS) ---
+# --- 5. MODULE 1: OPERATIONS ---
 def show_operations(dfs):
     st.title("🏠 Operations Command Center")
     if not dfs: return
@@ -153,7 +139,6 @@ def show_operations(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
-    # --- A. FILTERS ---
     with st.expander("🔎 Filters & View Settings", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         period_type = c1.selectbox("Period Type", ["Month", "Quarter", "Year"])
@@ -163,31 +148,22 @@ def show_operations(dfs):
             sel_spec = c3.selectbox("Month", range(1, 13), index=datetime.now().month-1)
         elif period_type == "Quarter":
             sel_spec = c3.selectbox("Quarter", [1, 2, 3, 4], index=0)
-        else:
-            sel_spec = 0 
+        else: sel_spec = 0 
             
         fleet_status = c4.selectbox("Fleet Filter", ["Active Only", "All Cars", "Inactive Only"], index=0)
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
-    # --- B. PROCESS CARS ---
     car_map = {} 
     active_fleet_count = 0
-    
     col_code = get_col_by_letter(df_cars, 'A')
-    col_type = get_col_by_letter(df_cars, 'B')
-    col_model = get_col_by_letter(df_cars, 'E')
-    col_year = get_col_by_letter(df_cars, 'H')
     col_status = get_col_by_letter(df_cars, 'AZ')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
 
     if col_code and col_status:
-        # 1. CLEAN: Remove empty rows
         valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
         
-        # 2. FILTER: Status
         if fleet_status == "Active Only":
-            # Match 'Valid', 'Active', 'ساري'
             cars_subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
         elif fleet_status == "Inactive Only":
             cars_subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
@@ -196,22 +172,14 @@ def show_operations(dfs):
 
         active_fleet_count = len(cars_subset)
         
-        # 3. MAP: Build list
         for _, row in cars_subset.iterrows(): 
             try:
                 c_id = clean_id_tag(row[col_code])
-                c_name = f"{row[col_type]} {row[col_model]} ({row[col_year]})"
-                
-                plate = ""
-                for p in plate_cols:
-                    val = row[get_col_by_letter(df_cars, p)]
-                    if pd.notnull(val): plate += str(val) + " "
-                
-                # Format: "Name | Plate" (Clean look)
+                c_name = f"{row[get_col_by_letter(df_cars, 'B')]} {row[get_col_by_letter(df_cars, 'E')]} ({row[get_col_by_letter(df_cars, 'H')]})"
+                plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
                 car_map[c_id] = f"{c_name} | {plate.strip()}"
             except: continue
 
-    # --- C. PROCESS ORDERS ---
     today = datetime.now()
     active_rentals = 0
     returning_today = 0
@@ -230,19 +198,11 @@ def show_operations(dfs):
                 e_date = pd.to_datetime(row[col_end], errors='coerce')
                 
                 if pd.isna(s_date) or pd.isna(e_date): continue
-                
-                # Filter Range
-                if not (s_date <= end_range and e_date >= start_range):
-                    continue
+                if not (s_date <= end_range and e_date >= start_range): continue
 
-                raw_car_id = row[col_car_ord]
-                car_id_clean = clean_id_tag(raw_car_id)
-                
-                # STRICT FILTER: Only show orders for visible cars
+                car_id_clean = clean_id_tag(row[col_car_ord])
                 if car_id_clean not in car_map: continue
                 
-                car_name = car_map[car_id_clean]
-
                 status = 'Completed'
                 if s_date <= today <= e_date: 
                     status = 'Active'
@@ -254,15 +214,13 @@ def show_operations(dfs):
                 if e_date.date() == today.date(): returning_today += 1
                 
                 timeline_data.append({
-                    'Car': car_name, 'Start': s_date, 'End': e_date,
-                    'Client': str(row[col_client]) if col_client else "N/A",
-                    'Status': status
+                    'Car': car_map[car_id_clean], 'Start': s_date, 'End': e_date,
+                    'Client': str(row[col_client]) if col_client else "N/A", 'Status': status
                 })
             except: continue
 
     utilization = (active_rentals / active_fleet_count * 100) if active_fleet_count > 0 else 0.0
 
-    # --- D. UI VISUALS ---
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🚗 Active Rentals", active_rentals, "Live")
     c2.metric("📅 Future Bookings", future_orders, "Paid & Pending")
@@ -270,59 +228,29 @@ def show_operations(dfs):
     c4.metric("📊 Utilization", f"{utilization:.1f}%", f"{active_fleet_count} Visible Cars")
     
     st.divider()
-    st.subheader(f"📅 Fleet Schedule ({period_type} View)")
+    st.subheader(f"📅 Fleet Schedule ({period_type})")
     
-    # --- CHART LOGIC (FORCE ALL CARS) ---
-    all_car_names = sorted(list(car_map.values())) # List of ALL active cars names
-    
-    # 1. Create Base DataFrame from Orders
+    all_car_names = sorted(list(car_map.values()))
     if timeline_data:
         df_timeline = pd.DataFrame(timeline_data)
     else:
         df_timeline = pd.DataFrame(columns=['Car', 'Start', 'End', 'Status', 'Client'])
 
-    # 2. Add "Ghost" Rows for cars with NO orders (to force them onto the chart)
-    # We add a dummy row with NaT dates so it doesn't draw a bar, but registers the Y-axis category
     for car_name in all_car_names:
         if car_name not in df_timeline['Car'].values:
             new_row = pd.DataFrame([{'Car': car_name, 'Start': pd.NaT, 'End': pd.NaT, 'Status': 'Active', 'Client': ''}])
             df_timeline = pd.concat([df_timeline, new_row], ignore_index=True)
 
     if not df_timeline.empty:
-        color_map = {
-            "Active": "#00C853",   # Green
-            "Future": "#9b59b6",   # Purple
-            "Completed": "#95a5a6" # Grey
-        }
-
-        fig = px.timeline(
-            df_timeline, 
-            x_start="Start", x_end="End", y="Car", color="Status",
-            color_discrete_map=color_map,
-            hover_data=["Client"]
-        )
-        
-        # 3. Explicitly Order Y-Axis
-        fig.update_yaxes(
-            autorange="reversed", 
-            categoryorder='array', 
-            categoryarray=all_car_names, # Forces strict order matching our list
-            type='category' # Ensures no numeric assumptions
-        )
-        
-        fig.update_layout(
-            height=max(500, len(all_car_names) * 50), # Increased height per car
-            plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
-            font=dict(color="white"),
-            xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]),
-            margin=dict(l=10, r=10, t=10, b=10)
-        )
+        color_map = {"Active": "#00C853", "Future": "#9b59b6", "Completed": "#95a5a6"}
+        fig = px.timeline(df_timeline, x_start="Start", x_end="End", y="Car", color="Status", color_discrete_map=color_map, hover_data=["Client"])
+        fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=all_car_names, type='category')
+        fig.update_layout(height=max(500, len(all_car_names) * 50), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"), xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]))
         fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
         st.plotly_chart(fig, use_container_width=True)
-    else: 
-        st.warning("No cars found.")
+    else: st.warning("No active fleet found.")
 
-# --- 7. MODULE 2: VEHICLE 360 ---
+# --- 6. MODULE 2: VEHICLE 360 (UPDATED: SEPARATE ACTIVE/INACTIVE) ---
 def show_vehicle_360(dfs):
     st.title("🚗 Vehicle 360° Profile")
     if not dfs: return
@@ -331,67 +259,63 @@ def show_vehicle_360(dfs):
     df_orders = dfs['orders']
     df_car_exp = dfs['car_expenses']
 
-    # --- FILTERS ---
     st.sidebar.markdown("---")
     st.sidebar.header("🔍 Filters")
     
-    # 1. Car Builder
+    # 1. Fleet Category Toggle
+    fleet_cat = st.sidebar.radio("Fleet Category", ["Active Fleet", "Inactive/History"], horizontal=True)
+
+    # 2. Build List based on Category
     car_options = {}
     col_code = get_col_by_letter(df_cars, 'A')
-    
-    # Plate columns
+    col_status = get_col_by_letter(df_cars, 'AZ')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
     
-    if col_code:
-        for _, row in df_cars.iterrows():
+    if col_code and col_status:
+        # Strict Row Filter
+        valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
+        
+        if fleet_cat == "Active Fleet":
+            subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
+        else:
+            subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
+
+        for _, row in subset.iterrows():
             try:
                 c_id = clean_id_tag(row[col_code])
                 c_label = f"{row[get_col_by_letter(df_cars, 'B')]} {row[get_col_by_letter(df_cars, 'E')]}"
-                
-                plate = ""
-                for p in plate_cols:
-                    val = row[get_col_by_letter(df_cars, p)]
-                    if pd.notnull(val): plate += str(val) + " "
-                
+                plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
                 car_options[f"[{row[col_code]}] {c_label} | {plate.strip()}"] = c_id
             except: continue
 
-    # Multi-Select
     selected_labels = st.sidebar.multiselect("Select Vehicles", list(car_options.keys()))
     selected_ids = [car_options[l] for l in selected_labels]
     
-    # Time Filters
     period_type = st.sidebar.selectbox("Period Type", ["Month", "Quarter", "Year"], key='v360_p')
     sel_year = st.sidebar.selectbox("Year", [2024, 2025, 2026], index=2, key='v360_y')
     if period_type == "Month":
         sel_spec = st.sidebar.selectbox("Month", range(1, 13), index=datetime.now().month-1, key='v360_m')
     elif period_type == "Quarter":
         sel_spec = st.sidebar.selectbox("Quarter", [1, 2, 3, 4], index=0, key='v360_q')
-    else:
-        sel_spec = 0
+    else: sel_spec = 0
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
-
-    # Filter Toggle
     show_only_active = st.sidebar.checkbox("Show only cars with trips in period", value=False)
 
     if not selected_ids:
         st.info("Please select at least one vehicle from the sidebar.")
         return
 
-    # --- PROCESSING ---
+    # PROCESSING (Revenue & Expenses)
+    trips_data, maint_list, exp_list = [], [], []
+    total_revenue, total_maint, total_exp = 0.0, 0.0, 0.0
     
-    # 1. Get Revenue & Trips
-    trips_data = []
-    total_revenue = 0.0
-    
+    # Revenue
     col_ord_start = get_col_by_letter(df_orders, 'L')
     col_ord_cost = get_col_by_letter(df_orders, 'AE')
     col_ord_car = get_col_by_letter(df_orders, 'C')
     col_ord_client = get_col_by_letter(df_orders, 'B')
     col_ord_id = get_col_by_letter(df_orders, 'A')
-
-    active_cars_in_period = set()
 
     if col_ord_start:
         for _, row in df_orders.iterrows():
@@ -401,119 +325,216 @@ def show_vehicle_360(dfs):
                 if pd.notnull(d) and start_range <= d <= end_range:
                     rev = clean_currency(row[col_ord_cost])
                     total_revenue += rev
-                    active_cars_in_period.add(cid)
-                    
                     trips_data.append({
-                        "Car": [k for k, v in car_options.items() if v == cid][0], # Reverse lookup name
-                        "Order #": row[col_ord_id],
-                        "Start": d,
-                        "Client": row[col_ord_client],
-                        "Revenue": rev
+                        "Car": [k for k, v in car_options.items() if v == cid][0],
+                        "Order #": row[col_ord_id], "Start": d, "Client": row[col_ord_client], "Revenue": rev
                     })
 
-    # 2. Get Expenses (Split)
-    maint_list = []
-    exp_list = []
-    total_maint = 0.0
-    total_exp = 0.0
-    
+    # Expenses
     col_exp_car = get_col_by_letter(df_car_exp, 'S')
     col_exp_amt = get_col_by_letter(df_car_exp, 'Z')
     col_exp_day = get_col_by_letter(df_car_exp, 'W')
     col_exp_m = get_col_by_letter(df_car_exp, 'X')
     col_exp_y = get_col_by_letter(df_car_exp, 'Y')
-    
-    # Columns for Split Logic
-    col_item_maint = get_col_by_letter(df_car_exp, 'I') # Maintenance
-    col_item_exp = get_col_by_letter(df_car_exp, 'L')   # General Expense (Petty Cash)
-    col_order_ref = get_col_by_letter(df_car_exp, 'T')  # Order Num
+    col_item_maint = get_col_by_letter(df_car_exp, 'I')
+    col_item_exp = get_col_by_letter(df_car_exp, 'L')
+    col_order_ref = get_col_by_letter(df_car_exp, 'T')
 
     if col_exp_car:
         for _, row in df_car_exp.iterrows():
             cid = clean_id_tag(row[col_exp_car])
             if cid in selected_ids:
                 try:
-                    # Date Check
-                    y = int(clean_currency(row[col_exp_y]))
-                    m = int(clean_currency(row[col_exp_m]))
-                    d = int(clean_currency(row[col_exp_day]))
-                    # Approx check (constructing full date might fail if day is invalid)
-                    # We'll rely on Year/Month for Month filter, Year for Year.
-                    # For Quarter/Range, we need full date.
+                    y, m = int(clean_currency(row[col_exp_y])), int(clean_currency(row[col_exp_m]))
+                    d_val = int(clean_currency(row[col_exp_day]))
                     
-                    # Simple Filter Logic
                     valid_date = False
-                    if period_type == "Year":
-                        if y == sel_year: valid_date = True
-                    elif period_type == "Month":
-                        if y == sel_year and m == sel_spec: valid_date = True
+                    if period_type == "Year" and y == sel_year: valid_date = True
+                    elif period_type == "Month" and y == sel_year and m == sel_spec: valid_date = True
                     elif period_type == "Quarter":
-                        # Simplification: check if month is in quarter
                         q_map = {1: [1,2,3], 2: [4,5,6], 3: [7,8,9], 4: [10,11,12]}
                         if y == sel_year and m in q_map[sel_spec]: valid_date = True
-
+                    
                     if valid_date:
                         amt = clean_currency(row[col_exp_amt])
-                        
-                        # Split Logic
                         is_maint = pd.notnull(row[col_item_maint]) and str(row[col_item_maint]).strip() != ""
                         is_gen_exp = pd.notnull(row[col_item_exp]) and str(row[col_item_exp]).strip() != ""
                         
                         entry = {
                             "Car": [k for k, v in car_options.items() if v == cid][0],
-                            "Date": f"{y}-{m}-{d}",
+                            "Date": f"{y}-{m}-{d_val}",
                             "Item": str(row[col_item_maint]) if is_maint else str(row[col_item_exp]),
-                            "Order Ref": row[col_order_ref],
-                            "Cost": amt
+                            "Order Ref": row[col_order_ref], "Cost": amt
                         }
-                        
-                        if is_maint:
+                        if is_maint: 
                             maint_list.append(entry)
                             total_maint += amt
-                        elif is_gen_exp:
+                        elif is_gen_exp: 
                             exp_list.append(entry)
                             total_exp += amt
-                            
                 except: continue
 
-    # Filter Enforcement
     if show_only_active and not trips_data:
         st.warning("No trips found for selected vehicles in this period.")
         return
 
-    # --- UI ---
     st.subheader(f"📊 Fleet Performance ({len(selected_ids)} Vehicles)")
-    
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Total Revenue", f"{total_revenue:,.0f} EGP")
     k2.metric("Maintenance", f"{total_maint:,.0f} EGP", delta_color="inverse")
     k3.metric("Other Expenses", f"{total_exp:,.0f} EGP", delta_color="inverse")
     k4.metric("Net Yield", f"{total_revenue - total_maint - total_exp:,.0f} EGP")
-
     st.divider()
     
     t1, t2, t3 = st.tabs(["📜 Trip Details", "🛠️ Maintenance Log", "💸 Expense Log"])
-    
     with t1:
         if trips_data:
             df_t = pd.DataFrame(trips_data)
             df_t['Revenue'] = df_t['Revenue'].apply(format_egp)
             st.dataframe(df_t, use_container_width=True)
         else: st.info("No trips.")
-        
     with t2:
         if maint_list:
             df_m = pd.DataFrame(maint_list)
             df_m['Cost'] = df_m['Cost'].apply(format_egp)
             st.dataframe(df_m, use_container_width=True)
         else: st.info("No maintenance records.")
-        
     with t3:
         if exp_list:
             df_e = pd.DataFrame(exp_list)
             df_e['Cost'] = df_e['Cost'].apply(format_egp)
             st.dataframe(df_e, use_container_width=True)
         else: st.info("No other expenses.")
+
+# --- 7. MODULE 3: FINANCIAL HQ (RESTORED) ---
+def show_financial_hq(dfs):
+    st.title("💰 Financial HQ (The CFO View)")
+    if not dfs: return
+
+    df_coll = dfs['collections']
+    df_exp = dfs['expenses']
+    df_car_exp = dfs['car_expenses']
+    df_orders = dfs['orders']
+    df_cars = dfs['cars']
+
+    st.sidebar.markdown("---")
+    st.sidebar.header("🗓️ Financial Period")
+    sel_year = st.sidebar.selectbox("Fiscal Year", [2024, 2025, 2026], index=2, key='fin_y')
+    sel_month = st.sidebar.selectbox("Fiscal Month", range(1, 13), index=0, key='fin_m')
+
+    inflow_data, total_cash_in = [], 0.0
+    col_coll_amt = get_col_by_letter(df_coll, 'R')
+    col_coll_order = get_col_by_letter(df_coll, 'L')
+    col_coll_type = get_col_by_letter(df_coll, 'F')
+    col_coll_m = get_col_by_letter(df_coll, 'P')
+    col_coll_y = get_col_by_letter(df_coll, 'Q')
+
+    order_dates = {}
+    col_ord_id = get_col_by_letter(df_orders, 'A')
+    col_ord_start = get_col_by_letter(df_orders, 'L')
+    if col_ord_id:
+        for _, row in df_orders.iterrows():
+            oid = clean_id_tag(row[col_ord_id])
+            s_date = pd.to_datetime(row[col_ord_start], errors='coerce')
+            order_dates[oid] = {'start': s_date}
+
+    if col_coll_amt:
+        for _, row in df_coll.iterrows():
+            try:
+                if int(clean_currency(row[col_coll_y])) == sel_year and int(clean_currency(row[col_coll_m])) == sel_month:
+                    amt = clean_currency(row[col_coll_amt])
+                    ord_code = clean_id_tag(row[col_coll_order])
+                    inc_type = str(row[col_coll_type]).lower()
+                    category = "Realized Income"
+                    
+                    if "deposit" in inc_type or "تأمين" in inc_type: category = "Security Deposit (Liability)"
+                    elif ord_code in order_dates:
+                        dates = order_dates[ord_code]
+                        if pd.notnull(dates['start']) and dates['start'] > datetime(sel_year, sel_month, 28):
+                            category = "Deferred Revenue (Future)"
+                    
+                    inflow_data.append({'Amount': amt, 'Category': category})
+                    total_cash_in += amt
+            except: continue
+
+    col_exp_amt = get_col_by_letter(df_exp, 'X')
+    col_exp_m = get_col_by_letter(df_exp, 'V')
+    col_exp_y = get_col_by_letter(df_exp, 'W')
+    total_cash_out = 0.0
+    
+    if col_exp_amt:
+        for _, row in df_exp.iterrows():
+            try:
+                if int(clean_currency(row[col_exp_y])) == sel_year and int(clean_currency(row[col_exp_m])) == sel_month:
+                    total_cash_out += clean_currency(row[col_exp_amt])
+            except: continue
+
+    col_carexp_amt = get_col_by_letter(df_car_exp, 'Z')
+    col_carexp_m = get_col_by_letter(df_car_exp, 'X')
+    col_carexp_y = get_col_by_letter(df_car_exp, 'Y')
+    col_carexp_owner = get_col_by_letter(df_car_exp, 'O')
+    owner_deductible_expenses = [] 
+    
+    if col_carexp_amt:
+        for _, row in df_car_exp.iterrows():
+            try:
+                if int(clean_currency(row[col_carexp_y])) == sel_year and int(clean_currency(row[col_carexp_m])) == sel_month:
+                    amt = clean_currency(row[col_carexp_amt])
+                    total_cash_out += amt
+                    if "owner" in str(row[col_carexp_owner]).lower() or "مالك" in str(row[col_carexp_owner]):
+                        car_c = clean_id_tag(row[get_col_by_letter(df_car_exp, 'S')])
+                        owner_deductible_expenses.append({'Car': car_c, 'Amount': amt})
+            except: continue
+
+    tab1, tab2, tab3 = st.tabs(["🌊 Cash Flow", "📉 P&L", "🤝 Owner Ledger"])
+
+    with tab1:
+        net_cash = total_cash_in - total_cash_out
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Cash In", format_egp(total_cash_in), "Collections")
+        c2.metric("Total Cash Out", format_egp(total_cash_out), "-Expenses", delta_color="inverse")
+        c3.metric("Net Liquidity", format_egp(net_cash), "Available Cash")
+        
+        fig_water = go.Figure(go.Waterfall(measure = ["relative", "relative", "total"], x = ["In", "Out", "Net"], y = [total_cash_in, -total_cash_out, 0]))
+        st.plotly_chart(fig_water, use_container_width=True)
+
+    with tab2:
+        real_revenue = sum(x['Amount'] for x in inflow_data if x['Category'] == "Realized Income")
+        real_profit = real_revenue - total_cash_out
+        k1, k2 = st.columns(2)
+        k1.metric("Real Revenue", format_egp(real_revenue))
+        k2.metric("Net Operating Profit", format_egp(real_profit))
+
+    with tab3:
+        st.subheader(f"Owner Payouts: {sel_month}/{sel_year}")
+        owner_ledger = []
+        col_car_code = get_col_by_letter(df_cars, 'A')
+        for _, car in df_cars.iterrows():
+            try:
+                car_id = clean_id_tag(car[col_car_code])
+                base = clean_currency(car[get_col_by_letter(df_cars, 'CJ')])
+                freq = clean_currency(car[get_col_by_letter(df_cars, 'CK')])
+                deduct_pct = clean_currency(car[get_col_by_letter(df_cars, 'CL')])
+                
+                if base == 0: continue 
+                if freq == 0: freq = 30
+                
+                monthly_gross = (base / 30) * 30
+                ops_fee = monthly_gross * (deduct_pct / 100)
+                maint_deduction = sum(x['Amount'] for x in owner_deductible_expenses if x['Car'] == car_id)
+                net_payout = monthly_gross - ops_fee - maint_deduction
+                
+                owner_ledger.append({
+                    "Car": f"{car[get_col_by_letter(df_cars, 'B')]} {car[get_col_by_letter(df_cars, 'E')]}",
+                    "Gross": monthly_gross, "Ops Fee": -ops_fee, "Maint": -maint_deduction, "Net": net_payout
+                })
+            except: continue
+            
+        if owner_ledger:
+            df_ledger = pd.DataFrame(owner_ledger)
+            for c in ["Gross", "Ops Fee", "Maint", "Net"]: df_ledger[c] = df_ledger[c].apply(format_egp)
+            st.dataframe(df_ledger, use_container_width=True)
+        else: st.info("No owner contracts found.")
 
 # --- 8. PAGE ROUTER ---
 st.sidebar.title("🚘 Rental OS 3.0")
@@ -525,7 +546,5 @@ dfs = load_data_v3()
 if page == "🏠 Operations": show_operations(dfs)
 elif page == "🚗 Vehicle 360": show_vehicle_360(dfs)
 elif page == "👥 CRM": st.title("👥 CRM (Coming Next)")
-elif page == "💰 Financial HQ": 
-    # Use existing Financial Logic (Placeholder for now to save space, paste previous module here if needed)
-    st.info("Financial Module Loaded (See V19 code)")
+elif page == "💰 Financial HQ": show_financial_hq(dfs)
 elif page == "⚠️ Risk Radar": st.title("⚠️ Risk Radar (Coming Next)")
