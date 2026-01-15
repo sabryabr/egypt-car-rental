@@ -8,6 +8,7 @@ import os
 import string
 import re
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 import calendar
 
 # --- 1. APP CONFIGURATION ---
@@ -151,7 +152,7 @@ def get_date_filter_range(period_type, year, specifier):
         _, last_day = calendar.monthrange(year, specifier)
         return datetime(year, specifier, 1), datetime(year, specifier, last_day, 23, 59, 59)
 
-# --- 5. MODULE 1: OPERATIONS (ENHANCED SUMMARY) ---
+# --- 5. MODULE 1: OPERATIONS ---
 def show_operations(dfs):
     st.title("🏠 Operations")
     if not dfs: return
@@ -159,7 +160,6 @@ def show_operations(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
-    # --- A. FILTERS ---
     with st.expander("🔎 Filters", expanded=False):
         c1, c2 = st.columns(2)
         period_type = c1.selectbox("Period", ["Month", "Quarter", "Year"])
@@ -174,10 +174,9 @@ def show_operations(dfs):
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
-    # --- B. PROCESS DATA ---
     car_map = {} 
     active_fleet_count = 0
-    sunburst_data = [] # For the Brand/Model Chart
+    sunburst_data = []
     
     col_code = get_col_by_letter(df_cars, 'A')
     col_status = get_col_by_letter(df_cars, 'AZ')
@@ -194,19 +193,15 @@ def show_operations(dfs):
         else: cars_subset = valid_rows
 
         active_fleet_count = len(cars_subset)
-        
         for _, row in cars_subset.iterrows(): 
             try:
                 c_id = clean_id_tag(row[col_code])
                 c_name = f"{row[col_brand]} {row[col_model]}"
                 plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
                 car_map[c_id] = f"{c_name} | {plate.strip()}"
-                
-                # Add to Chart Data
                 sunburst_data.append({'Brand': str(row[col_brand]).strip(), 'Model': str(row[col_model]).strip(), 'Count': 1})
             except: continue
 
-    # --- C. LIVE STATUS ---
     today = datetime.now()
     active_rentals = 0
     returning_today = 0
@@ -224,8 +219,6 @@ def show_operations(dfs):
                 s_date = pd.to_datetime(row[col_start], errors='coerce')
                 e_date = pd.to_datetime(row[col_end], errors='coerce')
                 if pd.isna(s_date) or pd.isna(e_date): continue
-                
-                # Only process orders in the filtered time window
                 if not (s_date <= end_range and e_date >= start_range): continue
 
                 car_id_clean = clean_id_tag(row[col_car_ord])
@@ -246,47 +239,30 @@ def show_operations(dfs):
                 })
             except: continue
 
-    # --- D. DASHBOARD SUMMARY (NEW) ---
     available_cars = active_fleet_count - active_rentals
     utilization = (active_rentals / active_fleet_count * 100) if active_fleet_count > 0 else 0.0
     
     st.subheader("📊 Fleet Pulse")
-    
-    # 1. Top Level Metrics
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("🚗 Total Fleet", active_fleet_count)
-    k2.metric("⚡ Live Rentals", active_rentals)
-    k3.metric("🟢 Available", available_cars)
-    k4.metric("📈 Utilization", f"{utilization:.1f}%")
+    k1.metric("🚗 Total", active_fleet_count)
+    k2.metric("⚡ Live", active_rentals)
+    k3.metric("🟢 Free", available_cars)
+    k4.metric("📈 Util", f"{utilization:.1f}%")
     
-    # 2. Charts Row
-    chart_c1, chart_c2 = st.columns(2)
-    
-    with chart_c1:
-        st.markdown("**Fleet Composition (Brand > Model)**")
+    c1, c2 = st.columns(2)
+    with c1:
         if sunburst_data:
-            df_sb = pd.DataFrame(sunburst_data)
-            fig_sb = px.sunburst(df_sb, path=['Brand', 'Model'], values='Count', color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_sb.update_layout(height=300, margin=dict(t=0, l=0, r=0, b=0), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117")
-            st.plotly_chart(fig_sb, use_container_width=True)
-        else: st.info("No fleet data for chart.")
-        
-    with chart_c2:
-        st.markdown("**Current Status Distribution**")
-        status_data = pd.DataFrame({
-            'Status': ['Rented', 'Available'],
-            'Count': [active_rentals, available_cars]
-        })
-        
-        fig_don = px.pie(status_data, values='Count', names='Status', hole=0.5, 
-                         color_discrete_map={'Rented':'#00C853', 'Available':'#29b6f6'})
-        fig_don.update_layout(height=300, margin=dict(t=0, l=0, r=0, b=0), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", showlegend=True)
-        st.plotly_chart(fig_don, use_container_width=True)
+            fig = px.sunburst(pd.DataFrame(sunburst_data), path=['Brand', 'Model'], values='Count', color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig.update_layout(height=250, margin=dict(t=0, l=0, r=0, b=0), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117")
+            st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        fig = px.pie(names=['Rented', 'Available'], values=[active_rentals, available_cars], hole=0.5, color_discrete_map={'Rented':'#00C853', 'Available':'#29b6f6'})
+        fig.update_layout(height=250, margin=dict(t=0, l=0, r=0, b=0), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117")
+        st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
-
-    # --- E. TIMELINE (EXISTING) ---
-    st.markdown(f"##### 📅 Schedule Details ({period_type})")
+    st.markdown(f"**Schedule ({period_type})**")
+    
     all_car_names = sorted(list(car_map.values()))
     df_timeline = pd.DataFrame(timeline_data) if timeline_data else pd.DataFrame(columns=['Car', 'Start', 'End', 'Status', 'Client'])
 
@@ -304,7 +280,7 @@ def show_operations(dfs):
                           xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]))
         fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
         st.plotly_chart(fig, use_container_width=True)
-    else: st.warning("No fleet found.")
+    else: st.warning("No fleet.")
 
 # --- 6. MODULE 2: VEHICLE 360 ---
 def show_vehicle_360(dfs):
@@ -418,7 +394,7 @@ def show_vehicle_360(dfs):
         if exp_list: st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
         else: st.info("Empty")
 
-# --- 7. MODULE 3: CRM (COL C+D) ---
+# --- 7. MODULE 3: CRM ---
 def show_crm(dfs):
     st.title("👥 CRM")
     if not dfs: return
@@ -443,8 +419,6 @@ def show_crm(dfs):
     # 2. Client Map
     client_id_map = {} 
     client_db = {}
-    
-    # MAPPING: ID=A, First=C, Last=D
     col_cl_id = get_col_by_letter(df_clients, 'A')
     col_cl_first = get_col_by_letter(df_clients, 'C') 
     col_cl_last = get_col_by_letter(df_clients, 'D')
@@ -453,13 +427,10 @@ def show_crm(dfs):
         for _, row in df_clients.iterrows():
             try:
                 cid = clean_client_code(row[col_cl_id])
-                
                 fname = str(row[col_cl_first]) if pd.notnull(row[col_cl_first]) else ""
                 lname = str(row[col_cl_last]) if pd.notnull(row[col_cl_last]) else ""
                 full_name = f"{fname} {lname}".strip()
-                
                 if not full_name: continue
-                
                 client_id_map[cid] = full_name
                 client_db[full_name] = {'Display': f"[{cid}] {full_name}", 'Name': full_name, 'Spend': 0, 'Trips': 0, 'History': []}
             except: continue
@@ -477,7 +448,6 @@ def show_crm(dfs):
             try:
                 raw_val = clean_client_code(row[col_ord_name])
                 if not raw_val or raw_val == "nan": continue
-                
                 real_name = client_id_map.get(raw_val, raw_val) 
                 if real_name not in client_db:
                     client_db[real_name] = {'Display': f"[?] {real_name}", 'Name': real_name, 'Spend': 0, 'Trips': 0, 'History': []}
@@ -487,7 +457,6 @@ def show_crm(dfs):
                 s = pd.to_datetime(row[col_ord_s], errors='coerce')
                 e = pd.to_datetime(row[col_ord_e], errors='coerce')
                 cid = clean_id_tag(row[col_ord_car])
-                
                 status = "Completed"
                 days = 0
                 if pd.notnull(s) and pd.notnull(e):
@@ -496,7 +465,6 @@ def show_crm(dfs):
                     elif s > datetime.now(): status = "Future"
                 
                 daily_rate = (amt / days) if days > 0 else 0
-                
                 rec['Spend'] += amt
                 rec['Trips'] += 1
                 rec['History'].append({
@@ -551,7 +519,7 @@ def show_crm(dfs):
                 else: st.warning("No history.")
             else: st.info("👈 Select a client.")
 
-# --- 8. MODULE 4: FINANCIAL HQ ---
+# --- 8. MODULE 4: FINANCIAL HQ (ULTIMATE LEDGER FIX) ---
 def show_financial_hq(dfs):
     st.title("💰 Financial HQ")
     if not dfs: return
@@ -573,6 +541,7 @@ def show_financial_hq(dfs):
 
     start_date, end_date = get_date_filter_range(period_type, sel_year, sel_spec)
     
+    # 1. CASH FLOW & P&L DATA
     inflow, cash_in = [], 0.0
     col_coll_amt = get_col_by_letter(df_coll, 'R')
     col_coll_y = get_col_by_letter(df_coll, 'Q')
@@ -610,87 +579,145 @@ def show_financial_hq(dfs):
                 if valid: cash_out += clean_currency(row[col_exp_amt])
             except: continue
 
+    # Car Expenses (Deductions vs Payouts)
     col_cexp_amt = get_col_by_letter(df_car_exp, 'Z')
     col_cexp_y = get_col_by_letter(df_car_exp, 'Y')
     col_cexp_m = get_col_by_letter(df_car_exp, 'X')
-    col_cexp_own = get_col_by_letter(df_car_exp, 'O')
+    col_cexp_d = get_col_by_letter(df_car_exp, 'W')
+    col_cexp_due_from = get_col_by_letter(df_car_exp, 'O') # "Due From" -> "Car Owner" means deduction
     col_cexp_car = get_col_by_letter(df_car_exp, 'S')
-    
-    owner_deductions = []
-    payments_map = {} 
-    current_period_payments = {}
+    col_cexp_item = get_col_by_letter(df_car_exp, 'F') # "Type of Expense" -> Rental/Payout means Payment TO Owner
+
+    # Maps for Ledger
+    deductions_in_period = {} # cid -> amount
+    payments_to_owner_period = {} # cid -> amount
+    payments_to_owner_lifetime = {} # cid -> amount
 
     if col_cexp_amt:
         for _, row in df_car_exp.iterrows():
             try:
                 amt = clean_currency(row[col_cexp_amt])
+                cid = clean_id_tag(row[col_cexp_car])
                 y, m = int(clean_currency(row[col_cexp_y])), int(clean_currency(row[col_cexp_m]))
                 
-                valid_period = False
-                if period_type=="Year" and y==sel_year: valid_period=True
-                elif period_type=="Month" and y==sel_year and m==sel_spec: valid_period=True
+                # Check Period Validity
+                is_in_period = False
+                if period_type=="Year" and y==sel_year: is_in_period=True
+                elif period_type=="Month" and y==sel_year and m==sel_spec: is_in_period=True
                 elif period_type=="Quarter":
-                    if y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]: valid_period=True
+                    if y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]: is_in_period=True
                 
-                if valid_period: cash_out += amt
+                # Global Expense Sum
+                if is_in_period: cash_out += amt
 
-                cid = clean_id_tag(row[col_cexp_car])
-                is_owner_charge = "owner" in str(row[col_cexp_own]).lower() or "مالك" in str(row[col_cexp_own])
-                if valid_period and is_owner_charge:
-                    owner_deductions.append({'Car': cid, 'Amount': amt})
+                # 1. Deductions (Due FROM Owner)
+                # Check Col O for "Car Owner" or "صاحب السيارة"
+                due_from = str(row[col_cexp_due_from]).lower()
+                is_deduction = "owner" in due_from or "صاحب" in due_from or "المالك" in due_from
                 
-                desc = str(row[get_col_by_letter(df_car_exp, 'I')]).lower()
-                is_payout = "owner" in desc or "payout" in desc or "دفع" in desc or "تحويل" in desc
+                if is_deduction:
+                    if is_in_period: deductions_in_period[cid] = deductions_in_period.get(cid, 0) + amt
+                
+                # 2. Payments (Paid TO Owner)
+                # Check Col F/I for "Rental" or "Rent" or "دفع"
+                exp_type = str(row[col_cexp_item]).lower()
+                is_payout = "rent" in exp_type or "ايجار" in exp_type or "owner" in exp_type
+                
                 if is_payout:
-                    payments_map[cid] = payments_map.get(cid, 0) + amt
-                    if valid_period: current_period_payments[cid] = current_period_payments.get(cid, 0) + amt
+                    payments_to_owner_lifetime[cid] = payments_to_owner_lifetime.get(cid, 0) + amt
+                    if is_in_period: payments_to_owner_period[cid] = payments_to_owner_period.get(cid, 0) + amt
 
             except: continue
 
+    # 2. OWNER LEDGER CALCULATION
     owner_ledger = []
+    total_owner_payouts_due = 0.0 # For P&L Chart
+
+    # Car Columns
     col_code = get_col_by_letter(df_cars, 'A')
     col_status = get_col_by_letter(df_cars, 'AZ')
-    col_base = get_col_by_letter(df_cars, 'CJ')
-    col_deduct = get_col_by_letter(df_cars, 'CL')
-    col_start = get_col_by_letter(df_cars, 'BB')
-
-    total_owner_payouts_due = 0.0
+    col_contract_start = get_col_by_letter(df_cars, 'AW')
+    col_monthly_fee = get_col_by_letter(df_cars, 'CJ')
+    col_pay_freq = get_col_by_letter(df_cars, 'CK') # Every X Days
+    col_deduct_pct = get_col_by_letter(df_cars, 'CL') # %
+    col_brokerage = get_col_by_letter(df_cars, 'CM') # Extra Fee
 
     for _, car in df_cars.iterrows():
         try:
+            # Active Check
             if col_status and not any(x in str(car[col_status]) for x in ['Valid', 'Active', 'ساري']): continue
             cid = clean_id_tag(car[col_code])
-            base = clean_currency(car[col_base])
-            deduct = clean_currency(car[col_deduct])
             
-            s_date = pd.to_datetime(car[col_start], errors='coerce')
+            # Fee Logic
+            base_fee = clean_currency(car[col_monthly_fee])
+            freq_days = clean_currency(car[col_pay_freq])
+            if freq_days == 0: freq_days = 30 # Default to monthly
+            
+            deduct_pct = clean_currency(car[col_deduct_pct])
+            brokerage = clean_currency(car[col_brokerage])
+            
+            # Start Date
+            s_date = pd.to_datetime(car[col_contract_start], errors='coerce')
             if pd.isna(s_date): s_date = datetime(2023, 1, 1)
             
+            # --- A. Calculate "Due Date" for Current Period ---
+            # If contract started on 15th, due date is 15th of the selected month
             try: due_day = datetime(sel_year, sel_spec if period_type=="Month" else 1, s_date.day)
-            except: due_day = datetime(sel_year, sel_spec, 28)
-            due_str = due_day.strftime("%Y-%m-%d") if period_type=="Month" else "Various"
+            except: due_day = datetime(sel_year, sel_spec, 28) # Handle Feb 30 etc
+            
+            due_date_display = due_day.strftime("%Y-%m-%d") if period_type=="Month" else "Various"
 
-            monthly_net = base * (1 - (deduct/100))
-            period_mult = 1 if period_type=="Month" else (12 if period_type=="Year" else 3)
-            gross_due = monthly_net * period_mult
-            deductions = sum(x['Amount'] for x in owner_deductions if x['Car'] == cid)
-            net_due = gross_due - deductions
-            total_owner_payouts_due += net_due
+            # --- B. Calculate Exact Amount Due (Period) ---
+            # Formula: (Base Fee * (Days in Period / Freq Days)) - % Deduction + Brokerage
+            
+            days_in_view = 30 # Default month
+            if period_type == "Quarter": days_in_view = 90
+            elif period_type == "Year": days_in_view = 365
+            
+            # How many "Payment Cycles" fit in this view?
+            cycles = days_in_view / freq_days
+            
+            gross_due = base_fee * cycles
+            ops_fee_deduction = gross_due * (deduct_pct / 100)
+            
+            # Maint Deductions from Expenses Sheet
+            maint_deduction = deductions_in_period.get(cid, 0)
+            
+            net_due_period = gross_due - ops_fee_deduction + brokerage - maint_deduction
+            total_owner_payouts_due += net_due_period
 
-            months_active = (datetime.now().year - s_date.year) * 12 + (datetime.now().month - s_date.month)
-            lifetime_accrued = months_active * monthly_net
-            lifetime_paid = payments_map.get(cid, 0)
+            # --- C. Historical Balance ---
+            # Total Days Active since contract start until NOW
+            days_active = (datetime.now() - s_date).days
+            if days_active < 0: days_active = 0
+            
+            total_cycles_lifetime = days_active / freq_days
+            lifetime_gross = base_fee * total_cycles_lifetime
+            lifetime_ops_fee = lifetime_gross * (deduct_pct / 100)
+            
+            # Approx lifetime brokerage (assuming monthly)
+            lifetime_brokerage = brokerage * (days_active / 30)
+            
+            # We don't have "Lifetime Maintenance Deductions" easily unless we scan all years. 
+            # For now, let's use the Payments vs Accrued Revenue
+            
+            lifetime_accrued = lifetime_gross - lifetime_ops_fee + lifetime_brokerage
+            lifetime_paid = payments_to_owner_lifetime.get(cid, 0)
+            
             balance = lifetime_accrued - lifetime_paid
 
             owner_ledger.append({
-                "Car": f"{car[get_col_by_letter(df_cars, 'B')]}",
-                "Due Date": due_str,
-                "Net Due": net_due,
-                "Paid (Period)": current_period_payments.get(cid, 0),
-                "Balance (Lifetime)": balance
+                "Car": f"{car[get_col_by_letter(df_cars, 'B')]} {car[get_col_by_letter(df_cars, 'E')]}",
+                "Due Date": due_date_display,
+                "Gross Fee": format_egp(gross_due),
+                "Deductions": format_egp(maint_deduction + ops_fee_deduction),
+                "Net Due": net_due_period, # Number for logic, formatted later
+                "Paid": payments_to_owner_period.get(cid, 0),
+                "Balance": balance
             })
         except: continue
 
+    # TABS
     tab1, tab2, tab3 = st.tabs(["Cash", "P&L", "Ledger"])
     
     with tab1:
@@ -705,6 +732,7 @@ def show_financial_hq(dfs):
 
     with tab2:
         rev = sum(x['Amount'] for x in inflow if x['Category'] == "Revenue")
+        # Profit = Revenue - (Ops Expenses) - (Owner Payables)
         profit = rev - cash_out - total_owner_payouts_due
         mrg = (profit/rev*100) if rev>0 else 0
         c1, c2 = st.columns(2)
@@ -723,11 +751,24 @@ def show_financial_hq(dfs):
     with tab3:
         if owner_ledger:
             df_l = pd.DataFrame(owner_ledger)
-            for c in ["Net Due", "Paid (Period)", "Balance (Lifetime)"]: df_l[c] = df_l[c].apply(format_egp)
-            st.dataframe(df_l.style.applymap(lambda v: 'color: red' if 'EGP' in str(v) and float(str(v).replace(' EGP','').replace(',','').replace('k','000').replace('M','000000')) > 100 else 'color: white'), use_container_width=True, height=400)
+            
+            # Format numbers
+            for c in ["Net Due", "Paid", "Balance"]: 
+                df_l[c] = df_l[c].apply(format_egp)
+            
+            # Conditional Formatting
+            def highlight_balance(val):
+                color = 'white'
+                if 'M' in val or 'k' in val or ',' in val:
+                    num = float(val.replace('M','000000').replace('k','000').replace(',',''))
+                    if num > 100: color = '#ff4b4b' # Red (Owe money)
+                    elif num < -100: color = '#00c853' # Green (Paid ahead)
+                return f'color: {color}'
+
+            st.dataframe(df_l.style.map(highlight_balance, subset=['Balance']), use_container_width=True, height=500)
         else: st.info("No Active Contracts")
 
-# --- 9. MODULE 5: RISK RADAR (3 BUCKETS & INSURANCE LOGIC) ---
+# --- 9. MODULE 5: RISK RADAR (3-TIER BUCKETS & INSURANCE LOGIC) ---
 def show_risk_radar(dfs):
     st.title("⚠️ Risk Radar")
     if not dfs: return
@@ -743,7 +784,6 @@ def show_risk_radar(dfs):
     col_exam_end = get_col_by_letter(df_cars, 'BD')
     col_lic_status = get_col_by_letter(df_cars, 'AT')
     
-    # Updated Insurance Columns
     col_ins_end = get_col_by_letter(df_cars, 'BJ')
     col_ins_status = get_col_by_letter(df_cars, 'BN')
     
