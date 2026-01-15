@@ -31,15 +31,14 @@ st.markdown("""
     /* Tables */
     .stDataFrame { direction: ltr; font-size: 0.8rem; }
     div[data-testid="stExpander"] { border: 1px solid #464b5d; border-radius: 4px; }
+    
+    /* Tabs */
     .stTabs [data-baseweb="tab-list"] { gap: 2px; margin-bottom: 0.5rem; flex-wrap: wrap; }
     .stTabs [data-baseweb="tab"] { height: 35px; padding: 0 10px; font-size: 0.85rem; flex-grow: 1; }
-    h1 { font-size: 1.4rem !important; margin-bottom: 0.2rem !important; }
-    h3 { font-size: 1.1rem !important; margin-top: 0.5rem !important; }
     
     /* Mobile */
     @media (max-width: 640px) {
         div[data-testid="column"] { width: 100% !important; flex: 1 1 auto !important; min-width: 100px !important; }
-        .stTabs [data-baseweb="tab"] { font-size: 0.75rem; padding: 0 5px; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -158,7 +157,6 @@ def show_operations(dfs):
         c1, c2 = st.columns(2)
         period_type = c1.selectbox("Period", ["Month", "Quarter", "Year"])
         sel_year = c2.selectbox("Year", [2024, 2025, 2026, 2027], index=2)
-        
         c3, c4 = st.columns(2)
         if period_type == "Month":
             sel_spec = c3.selectbox("Month", range(1, 13), index=datetime.now().month-1)
@@ -275,7 +273,6 @@ def show_vehicle_360(dfs):
             col_code = get_col_by_letter(df_cars, 'A')
             col_status = get_col_by_letter(df_cars, 'AZ')
             plate_cols = ['AC','AB','AA','Z','Y','X','W']
-            
             if col_code and col_status:
                 valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
                 if fleet_cat == "Active": subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
@@ -288,7 +285,6 @@ def show_vehicle_360(dfs):
                         plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
                         car_options[f"[{row[col_code]}] {c_label} | {plate.strip()}"] = c_id
                     except: continue
-
             select_all = st.checkbox("Select All")
             default_sel = list(car_options.keys()) if select_all else []
             selected_labels = st.multiselect("Vehicles", list(car_options.keys()), default=default_sel)
@@ -298,7 +294,6 @@ def show_vehicle_360(dfs):
         tf1, tf2 = st.columns(2)
         period_type = tf1.selectbox("View", ["Month", "Quarter", "Year"], key='v360_p')
         sel_year = tf2.selectbox("Year", [2024, 2025, 2026], index=2, key='v360_y')
-        
         tf3, tf4 = st.columns(2)
         if period_type == "Month": sel_spec = tf3.selectbox("Month", range(1, 13), index=datetime.now().month-1, key='v360_m')
         elif period_type == "Quarter": sel_spec = tf3.selectbox("Quarter", [1, 2, 3, 4], index=0, key='v360_q')
@@ -344,7 +339,6 @@ def show_vehicle_360(dfs):
                     elif period_type=="Month" and y==sel_year and m==sel_spec: valid=True
                     elif period_type=="Quarter":
                          if y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]: valid=True
-                    
                     if valid:
                         amt = clean_currency(row[col_exp_amt])
                         is_maint = pd.notnull(row[col_item_maint]) and str(row[col_item_maint]).strip() != ""
@@ -368,7 +362,7 @@ def show_vehicle_360(dfs):
     with t2: st.dataframe(pd.DataFrame(maint_list), use_container_width=True) if maint_list else st.info("Empty")
     with t3: st.dataframe(pd.DataFrame(exp_list), use_container_width=True) if exp_list else st.info("Empty")
 
-# --- 7. MODULE 3: CRM (ENHANCED DETAIL VIEW) ---
+# --- 7. MODULE 3: CRM (FIXED ID MATCHING) ---
 def show_crm(dfs):
     st.title("👥 CRM")
     if not dfs: return
@@ -377,7 +371,7 @@ def show_crm(dfs):
     df_clients = dfs['clients'] 
     df_cars = dfs['cars']
 
-    # --- A. Map Cars ---
+    # 1. Car Map
     car_display_map = {}
     col_code = get_col_by_letter(df_cars, 'A')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
@@ -390,10 +384,10 @@ def show_crm(dfs):
                 car_display_map[cid] = f"{cname} | {plate.strip()}"
             except: continue
 
-    # --- B. Build Client DB ---
+    # 2. Client Map (ID -> Name)
+    client_id_map = {} # ID -> {Name, Code}
     client_db = {}
     
-    # 1. From Clients Sheet
     col_cl_id = get_col_by_letter(df_clients, 'A')
     col_cl_first = get_col_by_letter(df_clients, 'B')
     col_cl_last = get_col_by_letter(df_clients, 'C')
@@ -401,19 +395,21 @@ def show_crm(dfs):
     if col_cl_id:
         for _, row in df_clients.iterrows():
             try:
+                cid = str(row[col_cl_id]).strip()
                 full_name = f"{row[col_cl_first]} {row[col_cl_last]}".strip()
                 if not full_name: continue
-                # Normalize name for matching
-                norm_name = full_name.lower().strip()
-                client_db[norm_name] = {
-                    'Display': f"[{row[col_cl_id]}] {full_name}", 
+                client_id_map[cid] = full_name
+                
+                # Init DB entry
+                client_db[full_name] = {
+                    'Display': f"[{cid}] {full_name}", 
                     'Name': full_name, 
                     'Spend': 0, 'Trips': 0, 
                     'History': []
                 }
             except: continue
 
-    # 2. Merge Orders
+    # 3. Process Orders with ID Lookup
     col_ord_name = get_col_by_letter(df_orders, 'B')
     col_ord_cost = get_col_by_letter(df_orders, 'AE')
     col_ord_s = get_col_by_letter(df_orders, 'L')
@@ -424,15 +420,17 @@ def show_crm(dfs):
     if col_ord_name:
         for _, row in df_orders.iterrows():
             try:
-                name_raw = str(row[col_ord_name]).strip()
-                if not name_raw or name_raw == "nan": continue
-                norm_name = name_raw.lower().strip()
+                raw_val = str(row[col_ord_name]).strip()
+                if not raw_val or raw_val == "nan": continue
                 
-                # Use DB entry or create temporary one if missing in Clients Sheet
-                if norm_name not in client_db:
-                    client_db[norm_name] = {'Display': f"[?] {name_raw}", 'Name': name_raw, 'Spend': 0, 'Trips': 0, 'History': []}
+                # Check if raw_val is an ID in our map
+                real_name = client_id_map.get(raw_val, raw_val) # Resolve ID "343" -> "John Doe"
                 
-                rec = client_db[norm_name]
+                # If name not in DB (maybe manual entry not in clients sheet), create temp
+                if real_name not in client_db:
+                    client_db[real_name] = {'Display': f"[?] {real_name}", 'Name': real_name, 'Spend': 0, 'Trips': 0, 'History': []}
+                
+                rec = client_db[real_name]
                 amt = clean_currency(row[col_ord_cost])
                 s = pd.to_datetime(row[col_ord_s], errors='coerce')
                 e = pd.to_datetime(row[col_ord_e], errors='coerce')
@@ -461,71 +459,45 @@ def show_crm(dfs):
                 })
             except: continue
 
-    # --- UI ---
+    # UI
     search = st.text_input("🔍 Search Client", "")
-    
-    # Convert Dict to DF for display
     data_list = []
     for k, v in client_db.items():
-        data_list.append({'Display': v['Display'], 'Spend': v['Spend'], 'Trips': v['Trips'], 'Key': k})
+        data_list.append({'Display': v['Display'], 'Spend': v['Spend'], 'Trips': v['Trips'], 'Key': v['Name']})
     
     df_crm = pd.DataFrame(data_list)
-    
     if not df_crm.empty:
         df_crm = df_crm.sort_values('Spend', ascending=False)
-        if search: 
-            df_crm = df_crm[df_crm['Display'].str.contains(search, case=False, na=False)]
+        if search: df_crm = df_crm[df_crm['Display'].str.contains(search, case=False, na=False)]
 
-        # Top Stats
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Clients", len(client_db))
-        c2.metric("Top Spender", df_crm.iloc[0]['Display'].split("] ")[1] if not df_crm.empty else "-")
+        c1.metric("Clients", len(client_db))
+        c2.metric("Top", df_crm.iloc[0]['Display'].split("] ")[1] if "]" in df_crm.iloc[0]['Display'] else df_crm.iloc[0]['Display'])
         c3.metric("Avg LTV", format_egp(df_crm['Spend'].mean()))
 
         st.divider()
-        
         col_list, col_detail = st.columns([1, 2])
         
         with col_list:
-            st.subheader("Client List")
-            # Format numbers for display
             df_display = df_crm.copy()
             df_display['Spend'] = df_display['Spend'].apply(format_egp)
-            
-            selection = st.dataframe(
-                df_display[['Display', 'Spend', 'Trips']], 
-                use_container_width=True, 
-                height=500, 
-                on_select="rerun", 
-                selection_mode="single-row",
-                hide_index=True
-            )
+            selection = st.dataframe(df_display[['Display', 'Spend', 'Trips']], use_container_width=True, height=500, on_select="rerun", selection_mode="single-row", hide_index=True)
         
         with col_detail:
-            st.subheader("History & Details")
             sel_idx = selection.selection.rows
             if sel_idx:
-                # Retrieve Full Data
                 client_key = df_display.iloc[sel_idx[0]]['Key']
                 client_data = client_db[client_key]
-                
-                # Header
                 st.info(f"**{client_data['Display']}**")
+                m1, m2 = st.columns(2)
+                m1.metric("Total", format_egp(client_data['Spend']))
+                m2.metric("Trips", client_data['Trips'])
                 
-                # Metrics
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Total Spend", format_egp(client_data['Spend']))
-                m2.metric("Total Trips", client_data['Trips'])
-                m3.metric("Avg Trip Cost", format_egp(client_data['Spend']/client_data['Trips']) if client_data['Trips']>0 else "0")
-                
-                # History Table
                 if client_data['History']:
                     hist_df = pd.DataFrame(client_data['History'])
                     st.dataframe(hist_df, use_container_width=True, hide_index=True)
-                else:
-                    st.warning("No rental history found.")
-            else:
-                st.info("👈 Select a client from the list.")
+                else: st.warning("No history.")
+            else: st.info("👈 Select a client.")
 
 # --- 8. MODULE 4: FINANCIAL HQ ---
 def show_financial_hq(dfs):
@@ -703,12 +675,90 @@ def show_financial_hq(dfs):
             st.dataframe(df_l.style.applymap(lambda v: 'color: red' if 'EGP' in str(v) and float(str(v).replace(' EGP','').replace(',','').replace('k','000').replace('M','000000')) > 100 else 'color: white'), use_container_width=True, height=400)
         else: st.info("No Active Contracts")
 
-# --- 8. NAV ---
+# --- 9. MODULE 5: RISK RADAR ---
+def show_risk_radar(dfs):
+    st.title("⚠️ Risk Radar")
+    if not dfs: return
+    
+    df_cars = dfs['cars']
+    today = datetime.now()
+    
+    # Risk Limits (Days)
+    LIMIT_URGENT = 30
+    LIMIT_WARN = 60
+    
+    risks = []
+    
+    # Columns
+    col_plate = get_col_by_letter(df_cars, 'AC') 
+    col_lic_end = get_col_by_letter(df_cars, 'AT') # License
+    col_ins_end = get_col_by_letter(df_cars, 'BK') # Insurance
+    col_con_end = get_col_by_letter(df_cars, 'BC') # Contract
+    col_name = get_col_by_letter(df_cars, 'B')
+    col_model = get_col_by_letter(df_cars, 'E')
+    col_status = get_col_by_letter(df_cars, 'AZ')
+
+    plate_cols = ['AC','AB','AA','Z','Y','X','W']
+
+    for _, row in df_cars.iterrows():
+        try:
+            # Only check Active cars
+            if col_status and not any(x in str(row[col_status]) for x in ['Valid', 'Active', 'ساري']): continue
+            
+            cname = f"{row[col_name]} {row[col_model]}"
+            plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])]).strip()
+            
+            # Check License
+            if col_lic_end:
+                d = pd.to_datetime(row[col_lic_end], errors='coerce')
+                if pd.notnull(d):
+                    days = (d - today).days
+                    if days < LIMIT_WARN:
+                        risks.append({'Car': cname, 'Plate': plate, 'Type': 'License', 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Status': 'Urgent' if days < LIMIT_URGENT else 'Warning'})
+
+            # Check Insurance
+            if col_ins_end:
+                d = pd.to_datetime(row[col_ins_end], errors='coerce')
+                if pd.notnull(d):
+                    days = (d - today).days
+                    if days < LIMIT_WARN:
+                        risks.append({'Car': cname, 'Plate': plate, 'Type': 'Insurance', 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Status': 'Urgent' if days < LIMIT_URGENT else 'Warning'})
+
+            # Check Contract
+            if col_con_end:
+                d = pd.to_datetime(row[col_con_end], errors='coerce')
+                if pd.notnull(d):
+                    days = (d - today).days
+                    if days < LIMIT_WARN:
+                        risks.append({'Car': cname, 'Plate': plate, 'Type': 'Contract', 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Status': 'Urgent' if days < LIMIT_URGENT else 'Warning'})
+
+        except: continue
+
+    if risks:
+        df_risk = pd.DataFrame(risks)
+        urgent_count = len(df_risk[df_risk['Status']=='Urgent'])
+        warn_count = len(df_risk[df_risk['Status']=='Warning'])
+        
+        c1, c2 = st.columns(2)
+        c1.metric("🔴 Urgent Action", urgent_count)
+        c2.metric("🟡 Upcoming", warn_count)
+        
+        st.divider()
+        
+        def highlight_risk(row):
+            return ['background-color: #3e1f1f' if row['Status'] == 'Urgent' else 'background-color: #3e331f'] * len(row)
+
+        st.dataframe(df_risk.style.apply(highlight_risk, axis=1), use_container_width=True, hide_index=True)
+    else:
+        st.success("✅ All systems go! No upcoming expirations.")
+
+# --- 10. NAV ---
 st.sidebar.title("🚘 Rental OS")
-page = st.sidebar.radio("", ["Operations", "Vehicle 360", "CRM", "Financial HQ"])
+page = st.sidebar.radio("", ["Operations", "Vehicle 360", "CRM", "Financial HQ", "Risk Radar"])
 st.sidebar.markdown("---")
 dfs = load_data_v3()
 if page == "Operations": show_operations(dfs)
 elif page == "Vehicle 360": show_vehicle_360(dfs)
 elif page == "CRM": show_crm(dfs)
 elif page == "Financial HQ": show_financial_hq(dfs)
+elif page == "Risk Radar": show_risk_radar(dfs)
