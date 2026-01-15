@@ -151,7 +151,7 @@ def get_date_filter_range(period_type, year, specifier):
         _, last_day = calendar.monthrange(year, specifier)
         return datetime(year, specifier, 1), datetime(year, specifier, last_day, 23, 59, 59)
 
-# --- 5. MODULE 1: OPERATIONS ---
+# --- 5. MODULE 1: OPERATIONS (ENHANCED SUMMARY) ---
 def show_operations(dfs):
     st.title("🏠 Operations")
     if not dfs: return
@@ -159,6 +159,7 @@ def show_operations(dfs):
     df_orders = dfs['orders']
     df_cars = dfs['cars']
 
+    # --- A. FILTERS ---
     with st.expander("🔎 Filters", expanded=False):
         c1, c2 = st.columns(2)
         period_type = c1.selectbox("Period", ["Month", "Quarter", "Year"])
@@ -173,10 +174,15 @@ def show_operations(dfs):
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
+    # --- B. PROCESS DATA ---
     car_map = {} 
     active_fleet_count = 0
+    sunburst_data = [] # For the Brand/Model Chart
+    
     col_code = get_col_by_letter(df_cars, 'A')
     col_status = get_col_by_letter(df_cars, 'AZ')
+    col_brand = get_col_by_letter(df_cars, 'B')
+    col_model = get_col_by_letter(df_cars, 'E')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
 
     if col_code and col_status:
@@ -188,14 +194,19 @@ def show_operations(dfs):
         else: cars_subset = valid_rows
 
         active_fleet_count = len(cars_subset)
+        
         for _, row in cars_subset.iterrows(): 
             try:
                 c_id = clean_id_tag(row[col_code])
-                c_name = f"{row[get_col_by_letter(df_cars, 'B')]} {row[get_col_by_letter(df_cars, 'E')]}"
+                c_name = f"{row[col_brand]} {row[col_model]}"
                 plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
                 car_map[c_id] = f"{c_name} | {plate.strip()}"
+                
+                # Add to Chart Data
+                sunburst_data.append({'Brand': str(row[col_brand]).strip(), 'Model': str(row[col_model]).strip(), 'Count': 1})
             except: continue
 
+    # --- C. LIVE STATUS ---
     today = datetime.now()
     active_rentals = 0
     returning_today = 0
@@ -213,6 +224,8 @@ def show_operations(dfs):
                 s_date = pd.to_datetime(row[col_start], errors='coerce')
                 e_date = pd.to_datetime(row[col_end], errors='coerce')
                 if pd.isna(s_date) or pd.isna(e_date): continue
+                
+                # Only process orders in the filtered time window
                 if not (s_date <= end_range and e_date >= start_range): continue
 
                 car_id_clean = clean_id_tag(row[col_car_ord])
@@ -233,16 +246,47 @@ def show_operations(dfs):
                 })
             except: continue
 
+    # --- D. DASHBOARD SUMMARY (NEW) ---
+    available_cars = active_fleet_count - active_rentals
     utilization = (active_rentals / active_fleet_count * 100) if active_fleet_count > 0 else 0.0
-
-    c1, c2 = st.columns(2)
-    c1.metric("Live", active_rentals)
-    c2.metric("Future", future_orders)
-    c3, c4 = st.columns(2)
-    c3.metric("Returns", returning_today)
-    c4.metric("Util %", f"{utilization:.1f}%")
     
-    st.markdown(f"**Schedule ({period_type})**")
+    st.subheader("📊 Fleet Pulse")
+    
+    # 1. Top Level Metrics
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("🚗 Total Fleet", active_fleet_count)
+    k2.metric("⚡ Live Rentals", active_rentals)
+    k3.metric("🟢 Available", available_cars)
+    k4.metric("📈 Utilization", f"{utilization:.1f}%")
+    
+    # 2. Charts Row
+    chart_c1, chart_c2 = st.columns(2)
+    
+    with chart_c1:
+        st.markdown("**Fleet Composition (Brand > Model)**")
+        if sunburst_data:
+            df_sb = pd.DataFrame(sunburst_data)
+            fig_sb = px.sunburst(df_sb, path=['Brand', 'Model'], values='Count', color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig_sb.update_layout(height=300, margin=dict(t=0, l=0, r=0, b=0), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117")
+            st.plotly_chart(fig_sb, use_container_width=True)
+        else: st.info("No fleet data for chart.")
+        
+    with chart_c2:
+        st.markdown("**Current Status Distribution**")
+        status_data = pd.DataFrame({
+            'Status': ['Rented', 'Available'],
+            'Count': [active_rentals, available_cars]
+        })
+        
+        fig_don = px.pie(status_data, values='Count', names='Status', hole=0.5, 
+                         color_discrete_map={'Rented':'#00C853', 'Available':'#29b6f6'})
+        fig_don.update_layout(height=300, margin=dict(t=0, l=0, r=0, b=0), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", showlegend=True)
+        st.plotly_chart(fig_don, use_container_width=True)
+
+    st.divider()
+
+    # --- E. TIMELINE (EXISTING) ---
+    st.markdown(f"##### 📅 Schedule Details ({period_type})")
     all_car_names = sorted(list(car_map.values()))
     df_timeline = pd.DataFrame(timeline_data) if timeline_data else pd.DataFrame(columns=['Car', 'Start', 'End', 'Status', 'Client'])
 
@@ -255,12 +299,12 @@ def show_operations(dfs):
         color_map = {"Active": "#00C853", "Future": "#9b59b6", "Completed": "#95a5a6"}
         fig = px.timeline(df_timeline, x_start="Start", x_end="End", y="Car", color="Status", color_discrete_map=color_map, hover_data=["Client"])
         fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=all_car_names, type='category')
-        fig.update_layout(height=max(300, len(all_car_names) * 40), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", 
+        fig.update_layout(height=max(300, len(all_car_names) * 35), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", 
                           font=dict(color="white", size=10), margin=dict(l=10, r=10, t=10, b=10),
                           xaxis=dict(showgrid=True, gridcolor="#333", range=[start_range, end_range]))
         fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#FF3D00")
         st.plotly_chart(fig, use_container_width=True)
-    else: st.warning("No fleet.")
+    else: st.warning("No fleet found.")
 
 # --- 6. MODULE 2: VEHICLE 360 ---
 def show_vehicle_360(dfs):
@@ -400,9 +444,10 @@ def show_crm(dfs):
     client_id_map = {} 
     client_db = {}
     
+    # MAPPING: ID=A, First=C, Last=D
     col_cl_id = get_col_by_letter(df_clients, 'A')
-    col_cl_first = get_col_by_letter(df_clients, 'C') # First Name = C
-    col_cl_last = get_col_by_letter(df_clients, 'D')  # Last Name = D
+    col_cl_first = get_col_by_letter(df_clients, 'C') 
+    col_cl_last = get_col_by_letter(df_clients, 'D')
     
     if col_cl_id:
         for _, row in df_clients.iterrows():
