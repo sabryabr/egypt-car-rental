@@ -374,7 +374,7 @@ def show_vehicle_360(dfs):
         if exp_list: st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
         else: st.info("Empty")
 
-# --- 7. MODULE 3: CRM (FIXED COLUMNS B/C/D) ---
+# --- 7. MODULE 3: CRM (COL C+D FIXED) ---
 def show_crm(dfs):
     st.title("👥 CRM")
     if not dfs: return
@@ -400,13 +400,10 @@ def show_crm(dfs):
     client_id_map = {} 
     client_db = {}
     
-    # CORRECTED MAPPING:
-    # Column A: ID
-    # Column B: Last Name
-    # Column C: First Name
+    # MAPPING: ID=A, First=C, Last=D
     col_cl_id = get_col_by_letter(df_clients, 'A')
-    col_cl_last = get_col_by_letter(df_clients, 'B') # Last Name
-    col_cl_first = get_col_by_letter(df_clients, 'C') # First Name
+    col_cl_first = get_col_by_letter(df_clients, 'C') 
+    col_cl_last = get_col_by_letter(df_clients, 'D')
     
     if col_cl_id:
         for _, row in df_clients.iterrows():
@@ -686,7 +683,7 @@ def show_financial_hq(dfs):
             st.dataframe(df_l.style.applymap(lambda v: 'color: red' if 'EGP' in str(v) and float(str(v).replace(' EGP','').replace(',','').replace('k','000').replace('M','000000')) > 100 else 'color: white'), use_container_width=True, height=400)
         else: st.info("No Active Contracts")
 
-# --- 9. MODULE 5: RISK RADAR (TIME BUCKETS) ---
+# --- 9. MODULE 5: RISK RADAR (3 BUCKETS) ---
 def show_risk_radar(dfs):
     st.title("⚠️ Risk Radar")
     if not dfs: return
@@ -694,8 +691,9 @@ def show_risk_radar(dfs):
     df_cars = dfs['cars']
     today = datetime.now()
     
-    # Buckets: 0-3m, 3-6m, 6-12m
-    # Days approx: 90, 180, 365
+    # 0-3m (0-90 days), 3-6m (90-180 days), 6-12m (180-365 days)
+    
+    risks = {'License': [], 'Insurance': [], 'Contract': []}
     
     col_lic_end = get_col_by_letter(df_cars, 'AT')
     col_ins_end = get_col_by_letter(df_cars, 'BK')
@@ -704,8 +702,6 @@ def show_risk_radar(dfs):
     col_model = get_col_by_letter(df_cars, 'E')
     col_status = get_col_by_letter(df_cars, 'AZ')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
-
-    risks = {'License': [], 'Insurance': [], 'Contract': []}
 
     for _, row in df_cars.iterrows():
         try:
@@ -718,13 +714,13 @@ def show_risk_radar(dfs):
                     d = pd.to_datetime(row[col], errors='coerce')
                     if pd.notnull(d):
                         days = (d - today).days
-                        status = "Safe"
-                        if days <= 90: status = "Critical (0-3 Months)"
-                        elif days <= 180: status = "Warning (3-6 Months)"
-                        elif days <= 365: status = "Watchlist (6-12 Months)"
+                        bucket = None
+                        if days <= 90: bucket = "Critical (0-3 Months)"
+                        elif days <= 180: bucket = "Warning (3-6 Months)"
+                        elif days <= 365: bucket = "Watchlist (6-12 Months)"
                         
-                        if status != "Safe":
-                            risks[cat].append({'Car': cname, 'Plate': plate, 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Bucket': status})
+                        if bucket:
+                            risks[cat].append({'Car': cname, 'Plate': plate, 'Due': d.strftime("%Y-%m-%d"), 'Days': days, 'Bucket': bucket})
 
             check(col_lic_end, 'License')
             check(col_ins_end, 'Insurance')
@@ -732,7 +728,6 @@ def show_risk_radar(dfs):
 
         except: continue
 
-    # UI Construction
     t1, t2, t3 = st.tabs(["📄 License", "🛡️ Insurance", "📝 Contract"])
     
     def render_tab(category):
@@ -743,7 +738,6 @@ def show_risk_radar(dfs):
             
         df = pd.DataFrame(items)
         
-        # Split by Bucket
         b1 = df[df['Bucket'] == "Critical (0-3 Months)"]
         b2 = df[df['Bucket'] == "Warning (3-6 Months)"]
         b3 = df[df['Bucket'] == "Watchlist (6-12 Months)"]
