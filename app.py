@@ -35,6 +35,9 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { height: 30px; padding: 0 10px; font-size: 0.85rem; }
     h1 { font-size: 1.3rem !important; margin-bottom: 0.2rem !important; }
     h3 { font-size: 1.0rem !important; margin-top: 0.5rem !important; }
+    
+    /* CRM Specific */
+    .crm-card { background-color: #1e2530; padding: 15px; border-radius: 8px; border: 1px solid #333; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -355,7 +358,111 @@ def show_vehicle_360(dfs):
     with t2: st.dataframe(pd.DataFrame(maint_list), use_container_width=True) if maint_list else st.info("Empty")
     with t3: st.dataframe(pd.DataFrame(exp_list), use_container_width=True) if exp_list else st.info("Empty")
 
-# --- 7. MODULE 3: FINANCIAL HQ ---
+# --- 7. MODULE 3: CRM ---
+def show_crm(dfs):
+    st.title("👥 CRM")
+    if not dfs: return
+    
+    df_orders = dfs['orders']
+    df_clients = dfs['clients'] # Loaded but let's build from orders first for guaranteed data
+
+    # 1. Build Client DB from Orders
+    client_stats = {} # Name -> {Spend, Trips, Last Date}
+    col_name = get_col_by_letter(df_orders, 'B')
+    col_phone = get_col_by_letter(df_orders, 'F')
+    col_cost = get_col_by_letter(df_orders, 'AE')
+    col_date = get_col_by_letter(df_orders, 'L')
+    col_car = get_col_by_letter(df_orders, 'C')
+
+    if col_name:
+        for _, row in df_orders.iterrows():
+            try:
+                name = str(row[col_name]).strip()
+                if not name or name == "nan": continue
+                
+                amt = clean_currency(row[col_cost])
+                d = pd.to_datetime(row[col_date], errors='coerce')
+                
+                if name not in client_stats:
+                    client_stats[name] = {'Spend': 0, 'Trips': 0, 'Last': pd.Timestamp.min, 'Cars': []}
+                
+                client_stats[name]['Spend'] += amt
+                client_stats[name]['Trips'] += 1
+                client_stats[name]['Cars'].append(str(row[col_car]))
+                if pd.notnull(d) and d > client_stats[name]['Last']: client_stats[name]['Last'] = d
+            except: continue
+
+    # Search
+    search = st.text_input("🔍 Search Client (Name)", "")
+    
+    # Leaderboard
+    df_crm = pd.DataFrame.from_dict(client_stats, orient='index').reset_index().rename(columns={'index':'Name'})
+    if not df_crm.empty:
+        df_crm['Avg Ticket'] = df_crm['Spend'] / df_crm['Trips']
+        df_crm = df_crm.sort_values('Spend', ascending=False)
+
+        if search:
+            df_crm = df_crm[df_crm['Name'].str.contains(search, case=False, na=False)]
+
+        # Top Section
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Clients", len(client_stats))
+        c2.metric("Top Spender", df_crm.iloc[0]['Name'] if not df_crm.empty else "-")
+        c3.metric("Avg LTV", format_egp(df_crm['Spend'].mean()))
+
+        st.divider()
+        
+        # Details View
+        c_left, c_right = st.columns([1, 2])
+        
+        with c_left:
+            st.markdown("### Client List")
+            selected_client = st.dataframe(
+                df_crm[['Name', 'Spend', 'Trips']], 
+                use_container_width=True, 
+                height=500,
+                on_select="rerun",
+                selection_mode="single-row"
+            )
+        
+        with c_right:
+            st.markdown("### Client Profile")
+            # Get Selection
+            sel_idx = selected_client.selection.rows
+            if sel_idx:
+                client_row = df_crm.iloc[sel_idx[0]]
+                name = client_row['Name']
+                stats = client_stats[name]
+                
+                # Profile Card
+                with st.container():
+                    st.markdown(f"""
+                    <div class="crm-card">
+                        <h2>👤 {name}</h2>
+                        <p>Total Spend: <b>{format_egp(stats['Spend'])}</b> | Trips: <b>{stats['Trips']}</b></p>
+                        <p>Status: {'🏆 VIP' if stats['Spend'] > 50000 else '👤 Regular'}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Filter Orders for Timeline
+                client_orders = df_orders[df_orders[col_name] == name]
+                timeline_data = []
+                for _, r in client_orders.iterrows():
+                     s = pd.to_datetime(r[get_col_by_letter(df_orders, 'L')], errors='coerce')
+                     e = pd.to_datetime(r[get_col_by_letter(df_orders, 'V')], errors='coerce')
+                     if pd.notnull(s) and pd.notnull(e):
+                         timeline_data.append({'Start': s, 'End': e, 'Car': str(r[col_car]), 'Cost': clean_currency(r[col_cost])})
+                
+                if timeline_data:
+                    df_t = pd.DataFrame(timeline_data)
+                    fig = px.timeline(df_t, x_start="Start", x_end="End", y="Car", color="Cost", title="Rental History")
+                    fig.update_yaxes(autorange="reversed")
+                    fig.update_layout(height=300, margin=dict(t=30, b=10), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"))
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("👈 Select a client from the list to view full profile.")
+
+# --- 8. MODULE 4: FINANCIAL HQ ---
 def show_financial_hq(dfs):
     st.title("💰 Financial HQ")
     if not dfs: return
@@ -376,12 +483,10 @@ def show_financial_hq(dfs):
 
     start_date, end_date = get_date_filter_range(period_type, sel_year, sel_spec)
     
-    # 1. CASH FLOW & P&L DATA
     inflow, cash_in = [], 0.0
     col_coll_amt = get_col_by_letter(df_coll, 'R')
     col_coll_y = get_col_by_letter(df_coll, 'Q')
     col_coll_m = get_col_by_letter(df_coll, 'P')
-    col_coll_type = get_col_by_letter(df_coll, 'F')
     
     if col_coll_amt:
         for _, row in df_coll.iterrows():
@@ -395,9 +500,7 @@ def show_financial_hq(dfs):
                 
                 if valid:
                     amt = clean_currency(row[col_coll_amt])
-                    ctype = str(row[col_coll_type]).lower()
-                    cat = "Deposit" if "deposit" in ctype or "تأمين" in ctype else "Revenue"
-                    inflow.append({"Amount": amt, "Category": cat})
+                    inflow.append({"Amount": amt, "Category": "Revenue"})
                     cash_in += amt
             except: continue
 
@@ -425,17 +528,15 @@ def show_financial_hq(dfs):
     col_cexp_car = get_col_by_letter(df_car_exp, 'S')
     
     owner_deductions = []
-    payments_map = {} # cid -> total paid history
+    payments_map = {} 
     current_period_payments = {}
 
-    # Scan Car Expenses for 1. Deductions 2. Owner Payments
     if col_cexp_amt:
         for _, row in df_car_exp.iterrows():
             try:
                 amt = clean_currency(row[col_cexp_amt])
                 y, m = int(clean_currency(row[col_cexp_y])), int(clean_currency(row[col_cexp_m]))
                 
-                # Check Period Validity
                 valid_period = False
                 if period_type=="Year" and y==sel_year: valid_period=True
                 elif period_type=="Month" and y==sel_year and m==sel_spec: valid_period=True
@@ -444,14 +545,11 @@ def show_financial_hq(dfs):
                 
                 if valid_period: cash_out += amt
 
-                # Owner Deductions (Maintenance chargeable to owner)
                 cid = clean_id_tag(row[col_cexp_car])
                 is_owner_charge = "owner" in str(row[col_cexp_own]).lower() or "مالك" in str(row[col_cexp_own])
                 if valid_period and is_owner_charge:
                     owner_deductions.append({'Car': cid, 'Amount': amt})
                 
-                # Payment History Tracking (Look for "Payout" keywords in Type/Desc)
-                # Using Column F (Type) or I (Item)
                 desc = str(row[get_col_by_letter(df_car_exp, 'I')]).lower()
                 is_payout = "owner" in desc or "payout" in desc or "دفع" in desc or "تحويل" in desc
                 if is_payout:
@@ -460,14 +558,12 @@ def show_financial_hq(dfs):
 
             except: continue
 
-    # 2. OWNER LEDGER
     owner_ledger = []
     col_code = get_col_by_letter(df_cars, 'A')
     col_status = get_col_by_letter(df_cars, 'AZ')
     col_base = get_col_by_letter(df_cars, 'CJ')
     col_deduct = get_col_by_letter(df_cars, 'CL')
     col_start = get_col_by_letter(df_cars, 'BB')
-    col_broker = get_col_by_letter(df_cars, 'CM') # Broker Column
 
     total_owner_payouts_due = 0.0
 
@@ -477,32 +573,21 @@ def show_financial_hq(dfs):
             cid = clean_id_tag(car[col_code])
             base = clean_currency(car[col_base])
             deduct = clean_currency(car[col_deduct])
-            broker = str(car[col_broker]) if col_broker else ""
             
-            # Start Date
             s_date = pd.to_datetime(car[col_start], errors='coerce')
             if pd.isna(s_date): s_date = datetime(2023, 1, 1)
             
-            # Due Date for this period
             try: due_day = datetime(sel_year, sel_spec if period_type=="Month" else 1, s_date.day)
             except: due_day = datetime(sel_year, sel_spec, 28)
             due_str = due_day.strftime("%Y-%m-%d") if period_type=="Month" else "Various"
 
-            # Monthly Net
             monthly_net = base * (1 - (deduct/100))
-            
-            # Commission (If Broker exists, add 10% example or 0)
-            comm = 0 
-            if len(broker) > 2: comm = 0 # Define logic if needed
-
-            # Period Dues
             period_mult = 1 if period_type=="Month" else (12 if period_type=="Year" else 3)
             gross_due = monthly_net * period_mult
             deductions = sum(x['Amount'] for x in owner_deductions if x['Car'] == cid)
-            net_due = gross_due - deductions + comm
+            net_due = gross_due - deductions
             total_owner_payouts_due += net_due
 
-            # Lifetime Balance
             months_active = (datetime.now().year - s_date.year) * 12 + (datetime.now().month - s_date.month)
             lifetime_accrued = months_active * monthly_net
             lifetime_paid = payments_map.get(cid, 0)
@@ -517,7 +602,6 @@ def show_financial_hq(dfs):
             })
         except: continue
 
-    # TABS
     tab1, tab2, tab3 = st.tabs(["Cash", "P&L", "Ledger"])
     
     with tab1:
@@ -556,9 +640,10 @@ def show_financial_hq(dfs):
 
 # --- 8. NAV ---
 st.sidebar.title("🚘 Rental OS")
-page = st.sidebar.radio("", ["Operations", "Vehicle 360", "Financial HQ"])
+page = st.sidebar.radio("", ["Operations", "Vehicle 360", "CRM", "Financial HQ"])
 st.sidebar.markdown("---")
 dfs = load_data_v3()
 if page == "Operations": show_operations(dfs)
 elif page == "Vehicle 360": show_vehicle_360(dfs)
+elif page == "CRM": show_crm(dfs)
 elif page == "Financial HQ": show_financial_hq(dfs)
