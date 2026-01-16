@@ -736,12 +736,17 @@ def show_financial_hq(dfs):
     col_plate = get_col_by_letter(df_cars, 'AC')
     col_model_yr = get_col_by_letter(df_cars, 'H')
     col_car_name = get_col_by_letter(df_cars, 'B')
+    col_status = get_col_by_letter(df_cars, 'AZ')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
     
     cid_to_meta = {} 
 
     for _, car in df_cars.iterrows():
         try:
+            # Active check CASE INSENSITIVE
+            status_val = str(car[col_status]).lower()
+            if not any(x in status_val for x in ['valid', 'active', 'ساري']): continue
+            
             cid = clean_id_tag(car[col_code])
             owner_name = f"{car[col_owner_f]} {car[col_owner_l]}".strip()
             if not owner_name: owner_name = f"Owner {cid}"
@@ -907,7 +912,7 @@ def show_financial_hq(dfs):
         else:
             st.info("لا توجد بيانات مالية.")
 
-# --- 9. MODULE 5: RISK RADAR ---
+# --- 9. MODULE 5: RISK RADAR (CAR CODE + PLATE + ACTIVE CHECK FIX) ---
 def show_risk_radar(dfs):
     st.title("⚠️ رادار المخاطر")
     if not dfs: return
@@ -932,14 +937,20 @@ def show_risk_radar(dfs):
 
     for _, row in df_cars.iterrows():
         try:
-            if col_status and not any(x in str(row[col_status]) for x in ['Valid', 'Active', 'ساري']): continue
+            # Fix: Case Insensitive Check
+            status_val = str(row[col_status]).lower()
+            if not any(x in status_val for x in ['valid', 'active', 'ساري']): continue
+            
             cid = clean_id_tag(row[col_code])
             cname = f"[{cid}] {row[col_name]} {row[col_model]}"
             plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])]).strip()
             
             # LICENSE
             lic_valid = True
-            if col_lic_status: lic_valid = any(x in str(row[col_lic_status]) for x in ['Valid', 'Active', 'ساري'])
+            if col_lic_status: 
+                l_stat = str(row[col_lic_status]).lower()
+                lic_valid = any(x in l_stat for x in ['valid', 'active', 'ساري'])
+            
             if lic_valid:
                 d_lic = pd.to_datetime(row[col_lic_end], errors='coerce') if col_lic_end else None
                 d_exam = pd.to_datetime(row[col_exam_end], errors='coerce') if col_exam_end else None
