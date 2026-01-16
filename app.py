@@ -134,7 +134,7 @@ def clean_currency(x):
     return float(match.group()) if match else 0.0
 
 def format_egp(x):
-    # Full number format as requested: 8,800 instead of 8.8k
+    # Full number format: 8,800
     return f"{x:,.0f} ج.م"
 
 def get_date_filter_range(period_type, year, specifier):
@@ -171,17 +171,15 @@ def show_operations(dfs):
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
-    # 1. Determine Status Per Car for Indicator
     today = datetime.now()
     active_rentals = 0
-    car_status_map = {} # CarID -> Status Color
+    car_status_map = {} 
     
     col_start = get_col_by_letter(df_orders, 'L')
     col_end = get_col_by_letter(df_orders, 'V')
     col_car_ord = get_col_by_letter(df_orders, 'C')
     col_client = get_col_by_letter(df_orders, 'B')
     
-    # Pre-scan orders to determine 'Today's Status'
     if col_start and col_car_ord:
         for _, row in df_orders.iterrows():
             try:
@@ -190,7 +188,7 @@ def show_operations(dfs):
                 e = pd.to_datetime(row[col_end], errors='coerce')
                 if pd.notnull(s) and pd.notnull(e):
                     if s <= today <= e:
-                        car_status_map[cid] = "🔴" # Rented
+                        car_status_map[cid] = "🔴" 
             except: continue
 
     car_map = {} 
@@ -218,9 +216,8 @@ def show_operations(dfs):
                 c_name = f"{row[col_brand]} {row[col_model]}"
                 plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])])
                 
-                # Indicator Logic
-                indicator = car_status_map.get(c_id, "🟢") # Default Available
-                if indicator == "🔴": active_rentals += 1 # Recount strictly based on filtered cars
+                indicator = car_status_map.get(c_id, "🟢") 
+                if indicator == "🔴": active_rentals += 1 
                 
                 car_map[c_id] = f"{indicator} {c_name} | {plate.strip()}"
                 sunburst_data.append({'Brand': str(row[col_brand]).strip(), 'Model': str(row[col_model]).strip(), 'Count': 1})
@@ -298,7 +295,7 @@ def show_operations(dfs):
         st.plotly_chart(fig, use_container_width=True)
     else: st.warning("لا يوجد سيارات.")
 
-# --- 6. MODULE 2: VEHICLE 360 (FORMAT & MISSING EXPENSES FIX) ---
+# --- 6. MODULE 2: VEHICLE 360 (FORMAT & DETAIL) ---
 def show_vehicle_360(dfs):
     st.title("🚗 ملف السيارات")
     if not dfs: return
@@ -348,23 +345,35 @@ def show_vehicle_360(dfs):
     trips_data, maint_list, exp_list = [], [], []
     total_revenue, total_maint, total_exp = 0.0, 0.0, 0.0
     
-    col_ord_start = get_col_by_letter(df_orders, 'L')
+    col_ord_start = get_col_by_letter(df_orders, 'L') # Date Time
+    col_ord_end = get_col_by_letter(df_orders, 'V') # Date Time
     col_ord_cost = get_col_by_letter(df_orders, 'AE')
     col_ord_car = get_col_by_letter(df_orders, 'C')
     col_ord_id = get_col_by_letter(df_orders, 'A')
+    
+    col_ord_loc_start = get_col_by_letter(df_orders, 'M') # Pickup
+    col_ord_loc_end = get_col_by_letter(df_orders, 'W') # Dropoff
 
     if col_ord_start:
         for _, row in df_orders.iterrows():
             cid = clean_id_tag(row[col_ord_car])
             if cid in selected_ids:
-                d = pd.to_datetime(row[col_ord_start], errors='coerce')
-                if pd.notnull(d) and start_range <= d <= end_range:
+                d_s = pd.to_datetime(row[col_ord_start], errors='coerce')
+                d_e = pd.to_datetime(row[col_ord_end], errors='coerce')
+                
+                if pd.notnull(d_s) and start_range <= d_s <= end_range:
                     rev = clean_currency(row[col_ord_cost])
                     total_revenue += rev
+                    
+                    # Detailed Strings
+                    start_str = f"{d_s.strftime('%Y-%m-%d %I:%M %p')} - {row[col_ord_loc_start]}"
+                    end_str = f"{d_e.strftime('%Y-%m-%d %I:%M %p')} - {row[col_ord_loc_end]}" if pd.notnull(d_e) else "-"
+                    
                     trips_data.append({
                         "السيارة": [k for k, v in car_options.items() if v == cid][0],
                         "رقم الطلب": row[col_ord_id],
-                        "التاريخ": d.strftime("%Y-%m-%d"),
+                        "بداية الرحلة": start_str,
+                        "نهاية الرحلة": end_str,
                         "الإيراد": format_egp(rev)
                     })
 
@@ -374,13 +383,16 @@ def show_vehicle_360(dfs):
     col_exp_y = get_col_by_letter(df_car_exp, 'Y')
     col_exp_m = get_col_by_letter(df_car_exp, 'X')
     col_exp_d = get_col_by_letter(df_car_exp, 'W')
-    col_exp_id_g = get_col_by_letter(df_car_exp, 'G') # Type ID: 1,2,3...8
-    col_exp_rec = get_col_by_letter(df_car_exp, 'A') # Record ID
     
-    # Detail columns based on Type
-    col_item_maint = get_col_by_letter(df_car_exp, 'I')
-    col_item_gen = get_col_by_letter(df_car_exp, 'L') 
-    col_item_type = get_col_by_letter(df_car_exp, 'F') # Broad category name
+    # Detail logic based on prompt
+    col_exp_type_ar = get_col_by_letter(df_car_exp, 'E') # Type (Arabic)
+    col_exp_maint_ar = get_col_by_letter(df_car_exp, 'H') # Maint Statement (Arabic) -- FIXED to H
+    col_exp_stmt_ar = get_col_by_letter(df_car_exp, 'K') # General Statement
+    
+    col_ref_q = get_col_by_letter(df_car_exp, 'Q')
+    col_ref_r = get_col_by_letter(df_car_exp, 'R')
+    col_ref_t = get_col_by_letter(df_car_exp, 'T') # Order Ref
+    col_ref_s = get_col_by_letter(df_car_exp, 'S') # Car (Owner)
 
     if col_exp_car:
         for _, row in df_car_exp.iterrows():
@@ -398,35 +410,41 @@ def show_vehicle_360(dfs):
                     
                     if valid:
                         amt = clean_currency(row[col_exp_amt])
-                        type_id = str(row[col_exp_id_g]).strip()
+                        type_str = str(row[col_exp_type_ar]).strip() # e.g. تعاقد, صيانة
                         
-                        # Determine Category & Name
-                        category = "Other"
-                        item_name = str(row[col_item_type])
+                        # Logic for Display Name
+                        display_name = type_str
+                        is_maint = False
                         
-                        # IDs: 3=Fines, 4=Maint -> Maintenance Tab
-                        # IDs: 1=Contract, 2=Ins, 5=Office, 6=Ops, 7=Refund, 8=Broker -> Expenses Tab
+                        if "صيانات" in type_str or "Maintenance" in type_str:
+                            is_maint = True
+                            display_name = str(row[col_exp_maint_ar]) # Col H
                         
-                        if type_id in ['3', '4']: # Maintenance / Fines
-                            category = "Maint"
-                            if pd.notnull(row[col_item_maint]): item_name = str(row[col_item_maint])
-                        else: # General Expenses
-                            category = "Exp"
-                            if pd.notnull(row[col_item_gen]): item_name = str(row[col_item_gen])
-                            # Explicitly handle Deposit Refund & Brokerage
-                            if type_id == '7': item_name = f"رد تأمين - {item_name}"
-                            if type_id == '8': item_name = f"عمولة سمسرة - {item_name}"
-                            if type_id == '1': item_name = f"دفعة تعاقد - {item_name}"
+                        elif "تعاقد" in type_str or "Contracting" in type_str:
+                            display_name = f"{type_str} / {row[col_ref_q]} - {row[col_ref_r]}"
+                            
+                        elif "رد تامين" in type_str or "Deposit Refund" in type_str:
+                            display_name = f"{type_str} / {row[col_ref_t]}"
+                            
+                        elif "عمولة وسيط" in type_str or "Brokerage" in type_str:
+                            display_name = f"{type_str} / {row[col_ref_s]}"
+                            
+                        elif "تشغيل" in type_str or "Operating" in type_str or "مكتب" in type_str or "Office" in type_str:
+                            display_name = f"{type_str} / {row[col_exp_stmt_ar]} - {row[col_ref_t]}"
+                        
+                        else:
+                            # Standard Fallback
+                            stmt = str(row[col_exp_stmt_ar]) if pd.notnull(row[col_exp_stmt_ar]) else ""
+                            display_name = f"{type_str} - {stmt}"
 
                         entry = {
-                            "رقم السجل": row[col_exp_rec],
                             "السيارة": [k for k, v in car_options.items() if v == cid][0],
                             "التاريخ": f"{y}-{m:02d}-{d_val:02d}",
-                            "البند": item_name,
+                            "البند": display_name,
                             "التكلفة": format_egp(amt)
                         }
                         
-                        if category == "Maint": 
+                        if is_maint: 
                             maint_list.append(entry)
                             total_maint += amt
                         else: 
@@ -454,7 +472,7 @@ def show_vehicle_360(dfs):
         if exp_list: st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
         else: st.info("فارغ")
 
-# --- 7. MODULE 3: CRM (FIXED NAME ORDER) ---
+# --- 7. MODULE 3: CRM ---
 def show_crm(dfs):
     st.title("👥 إدارة العملاء")
     if not dfs: return
@@ -476,7 +494,7 @@ def show_crm(dfs):
                 car_display_map[cid] = f"{cname} | {plate.strip()}"
             except: continue
 
-    # 2. Client Map (Code first)
+    # 2. Client Map
     client_id_map = {} 
     client_db = {}
     col_cl_id = get_col_by_letter(df_clients, 'A')
@@ -491,11 +509,8 @@ def show_crm(dfs):
                 lname = str(row[col_cl_last]) if pd.notnull(row[col_cl_last]) else ""
                 full_name = f"{fname} {lname}".strip()
                 if not full_name: continue
-                
-                # Format: [Code] Name
-                display_str = f"[{cid}] {full_name}"
                 client_id_map[cid] = full_name
-                client_db[full_name] = {'Display': display_str, 'Name': full_name, 'Spend': 0, 'Trips': 0, 'History': []}
+                client_db[full_name] = {'Display': f"[{cid}] {full_name}", 'Name': full_name, 'Spend': 0, 'Trips': 0, 'History': []}
             except: continue
 
     # 3. Process Orders
@@ -512,7 +527,6 @@ def show_crm(dfs):
                 raw_val = clean_client_code(row[col_ord_name])
                 if not raw_val or raw_val == "nan": continue
                 real_name = client_id_map.get(raw_val, raw_val) 
-                
                 if real_name not in client_db:
                     client_db[real_name] = {'Display': f"[?] {real_name}", 'Name': real_name, 'Spend': 0, 'Trips': 0, 'History': []}
                 
@@ -593,6 +607,7 @@ def show_financial_hq(dfs):
     df_exp = dfs['expenses']
     df_car_exp = dfs['car_expenses']
     df_cars = dfs['cars']
+    df_orders = dfs['orders']
 
     with st.expander("🗓️ إعدادات الفترة", expanded=True):
         f1, f2 = st.columns(2)
@@ -663,7 +678,7 @@ def show_financial_hq(dfs):
                 cid = clean_id_tag(row[col_cexp_car])
                 type_id = str(row[col_cexp_id_g]).strip()
                 
-                # Global Period Check (For general cash out)
+                # Global Period Check
                 y, m = int(clean_currency(row[col_cexp_y])), int(clean_currency(row[col_cexp_m]))
                 is_in_period = False
                 if period_type=="سنة" and y==sel_year: is_in_period=True
@@ -674,17 +689,22 @@ def show_financial_hq(dfs):
                 if is_in_period: cash_out += amt
 
                 # --- LEDGER LOGIC ---
-                # 1. Contracting Payment (ID 1) - Used to offset Due
-                # Should check Col Q/R to see which month this payment was FOR
-                
-                if type_id == '1': # Contracting
+                # 1. Contracting Payment (ID 1)
+                # Check Due Month/Year in Q/R
+                if type_id == '1': 
+                    # If this specific contracting payment is meant for THIS period
+                    pay_q = int(clean_currency(row[col_cexp_due_q]))
+                    pay_r = int(clean_currency(row[col_cexp_due_r]))
+                    
+                    is_payment_for_this_period = False
+                    if period_type == "شهر" and pay_r == sel_year and pay_q == sel_spec: is_payment_for_this_period = True
+                    elif period_type == "سنة" and pay_r == sel_year: is_payment_for_this_period = True
+                    
                     payments_to_owner_lifetime[cid] = payments_to_owner_lifetime.get(cid, 0) + amt
-                    # For period specific paid, we check if the payment date falls in view OR if it was assigned to this view
-                    # Using Payment Date for Cash Flow
-                    if is_in_period: payments_to_owner_period[cid] = payments_to_owner_period.get(cid, 0) + amt
+                    if is_payment_for_this_period: 
+                        payments_to_owner_period[cid] = payments_to_owner_period.get(cid, 0) + amt
                 
-                elif type_id == '8': # Brokerage (Paid to owner/broker)
-                    # Treated as payment
+                elif type_id == '8': # Brokerage
                     payments_to_owner_lifetime[cid] = payments_to_owner_lifetime.get(cid, 0) + amt
                     if is_in_period: payments_to_owner_period[cid] = payments_to_owner_period.get(cid, 0) + amt
 
@@ -702,10 +722,9 @@ def show_financial_hq(dfs):
     col_status = get_col_by_letter(df_cars, 'AZ')
     col_contract_start = get_col_by_letter(df_cars, 'AW')
     col_monthly_fee = get_col_by_letter(df_cars, 'CJ')
-    col_pay_freq = get_col_by_letter(df_cars, 'CK') # X Days
-    col_deduct_pct = get_col_by_letter(df_cars, 'CL') # %
-    col_brokerage = get_col_by_letter(df_cars, 'CM') # Fee
-    col_plate = get_col_by_letter(df_cars, 'AC') 
+    col_pay_freq = get_col_by_letter(df_cars, 'CK') 
+    col_deduct_pct = get_col_by_letter(df_cars, 'CL') 
+    col_brokerage = get_col_by_letter(df_cars, 'CM') 
 
     for _, car in df_cars.iterrows():
         try:
@@ -722,12 +741,10 @@ def show_financial_hq(dfs):
             s_date = pd.to_datetime(car[col_contract_start], errors='coerce')
             if pd.isna(s_date): s_date = datetime(2023, 1, 1)
             
-            # A. Due Date
             try: due_day = datetime(sel_year, sel_spec if period_type=="شهر" else 1, s_date.day)
             except: due_day = datetime(sel_year, sel_spec, 28)
             due_date_display = due_day.strftime("%Y-%m-%d") if period_type=="شهر" else "متعدد"
 
-            # B. Period Due
             days_in_view = 30
             if period_type == "ربع سنوي": days_in_view = 90
             elif period_type == "سنة": days_in_view = 365
@@ -740,7 +757,6 @@ def show_financial_hq(dfs):
             net_due_period = gross_due - ops_fee_deduction + brokerage - maint_deduction
             total_owner_payouts_due += net_due_period
 
-            # C. Balance
             days_active = (datetime.now() - s_date).days
             if days_active < 0: days_active = 0
             
@@ -751,16 +767,15 @@ def show_financial_hq(dfs):
             
             lifetime_accrued = lifetime_gross - lifetime_ops_fee + lifetime_brokerage
             lifetime_paid = payments_to_owner_lifetime.get(cid, 0)
-            
             balance = lifetime_accrued - lifetime_paid
 
             owner_ledger.append({
-                "رقم السجل": cid, # Used as reference
+                "رقم السجل": cid, 
                 "السيارة": f"{car[get_col_by_letter(df_cars, 'B')]} {car[get_col_by_letter(df_cars, 'E')]}",
                 "تاريخ الاستحقاق": due_date_display,
                 "إجمالي المستحق": format_egp(gross_due),
                 "خصومات": format_egp(maint_deduction + ops_fee_deduction),
-                "الصافي المستحق": net_due_period, # Raw number for chart logic
+                "الصافي المستحق": net_due_period, 
                 "تم دفعه": payments_to_owner_period.get(cid, 0),
                 "الرصيد التراكمي": balance
             })
@@ -799,11 +814,7 @@ def show_financial_hq(dfs):
         if owner_ledger:
             df_l = pd.DataFrame(owner_ledger)
             df_l = df_l.sort_values('تاريخ الاستحقاق')
-            
-            # Format numbers
-            for c in ["الصافي المستحق", "تم دفعه", "الرصيد التراكمي"]: 
-                df_l[c] = df_l[c].apply(format_egp)
-            
+            for c in ["الصافي المستحق", "تم دفعه", "الرصيد التراكمي"]: df_l[c] = df_l[c].apply(format_egp)
             def highlight_balance(val):
                 color = 'white'
                 try:
@@ -812,11 +823,10 @@ def show_financial_hq(dfs):
                     elif num < -100: color = '#00c853'
                 except: pass
                 return f'color: {color}'
-
             st.dataframe(df_l.style.map(highlight_balance, subset=['الرصيد التراكمي']), use_container_width=True, height=500)
         else: st.info("لا توجد عقود نشطة.")
 
-# --- 9. MODULE 5: RISK RADAR (CAR CODE + PLATE) ---
+# --- 9. MODULE 5: RISK RADAR ---
 def show_risk_radar(dfs):
     st.title("⚠️ رادار المخاطر")
     if not dfs: return
@@ -834,7 +844,8 @@ def show_risk_radar(dfs):
     col_con_end = get_col_by_letter(df_cars, 'BC')
     col_name = get_col_by_letter(df_cars, 'B')
     col_model = get_col_by_letter(df_cars, 'E')
-    col_code = get_col_by_letter(df_cars, 'A') # Car Code
+    col_code = get_col_by_letter(df_cars, 'A') 
+    col_plate = get_col_by_letter(df_cars, 'AC') 
     col_status = get_col_by_letter(df_cars, 'AZ')
     plate_cols = ['AC','AB','AA','Z','Y','X','W']
 
@@ -845,22 +856,19 @@ def show_risk_radar(dfs):
             cname = f"[{cid}] {row[col_name]} {row[col_model]}"
             plate = "".join([str(row[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(row[get_col_by_letter(df_cars, p)])]).strip()
             
-            # --- LICENSE ---
+            # LICENSE
             lic_valid = True
             if col_lic_status: lic_valid = any(x in str(row[col_lic_status]) for x in ['Valid', 'Active', 'ساري'])
-            
             if lic_valid:
                 d_lic = pd.to_datetime(row[col_lic_end], errors='coerce') if col_lic_end else None
                 d_exam = pd.to_datetime(row[col_exam_end], errors='coerce') if col_exam_end else None
                 target, reason = None, "ترخيص"
-                
                 if d_lic and d_exam:
                     if d_lic == d_exam: target, reason = d_lic, "ترخيص + فحص"
                     elif d_lic < d_exam: target, reason = d_lic, "ترخيص"
                     else: target, reason = d_exam, "فحص"
                 elif d_lic: target, reason = d_lic, "ترخيص"
                 elif d_exam: target, reason = d_exam, "فحص"
-                
                 if target:
                     days = (target - today).days
                     bucket = None
@@ -869,12 +877,11 @@ def show_risk_radar(dfs):
                     elif days > 180: bucket = "خطر منخفض (> 6 أشهر)"
                     if bucket: risks['License'].append({'السيارة': cname, 'اللوحة': plate, 'السبب': reason, 'الاستحقاق': target.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
 
-            # --- INSURANCE ---
+            # INSURANCE
             has_ins = False
             if col_ins_status:
                 s_val = str(row[col_ins_status]).lower()
                 if "yes" in s_val or "يوجد" in s_val: has_ins = True
-            
             if has_ins and col_ins_end:
                 d = pd.to_datetime(row[col_ins_end], errors='coerce')
                 if pd.notnull(d):
@@ -885,7 +892,7 @@ def show_risk_radar(dfs):
                     elif days > 180: bucket = "خطر منخفض (> 6 أشهر)"
                     if bucket: risks['Insurance'].append({'السيارة': cname, 'اللوحة': plate, 'الاستحقاق': d.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
 
-            # --- CONTRACT ---
+            # CONTRACT
             if col_con_end:
                 d = pd.to_datetime(row[col_con_end], errors='coerce')
                 if pd.notnull(d):
@@ -899,27 +906,21 @@ def show_risk_radar(dfs):
         except: continue
 
     t1, t2, t3 = st.tabs(["📄 الترخيص", "🛡️ التأمين", "📝 العقود"])
-    
     def render_tab(category):
         items = risks[category]
         if not items:
             st.success("✅ الكل سليم.")
             return
-            
         df = pd.DataFrame(items).sort_values('Days')
-        
         b1 = df[df['التصنيف'] == "خطر مرتفع (0-3 أشهر)"]
         b2 = df[df['التصنيف'] == "خطر متوسط (3-6 أشهر)"]
         b3 = df[df['التصنيف'] == "خطر منخفض (> 6 أشهر)"]
-        
         with st.expander(f"🔴 خطر مرتفع (0-3 أشهر) [{len(b1)}]", expanded=True):
             if not b1.empty: st.dataframe(b1.drop(columns=['التصنيف', 'Days']), use_container_width=True)
             else: st.info("لا يوجد")
-            
         with st.expander(f"🟡 خطر متوسط (3-6 أشهر) [{len(b2)}]", expanded=False):
             if not b2.empty: st.dataframe(b2.drop(columns=['التصنيف', 'Days']), use_container_width=True)
             else: st.info("لا يوجد")
-            
         with st.expander(f"🟢 خطر منخفض (> 6 أشهر) [{len(b3)}]", expanded=False):
             if not b3.empty: st.dataframe(b3.drop(columns=['التصنيف', 'Days']), use_container_width=True)
             else: st.info("لا يوجد")
