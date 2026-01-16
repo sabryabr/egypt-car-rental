@@ -29,11 +29,11 @@ st.markdown("""
     label[data-testid="stMetricLabel"] { font-size: 0.9rem !important; font-family: 'Cairo'; margin-bottom: 5px !important; color: #b0b3b8 !important; }
     div[data-testid="stMetricValue"] { font-size: 1.4rem !important; font-weight: bold; }
     
-    /* Tables: Right Align */
-    .stDataFrame { direction: rtl; width: 100%; text-align: right; }
+    /* Tables: Left Align Request */
+    .stDataFrame { direction: ltr; width: 100%; text-align: left; }
     .stDataFrame div[data-testid="stHorizontalBlock"] { width: 100%; }
-    th { text-align: right !important; font-family: 'Cairo'; }
-    td { text-align: right !important; font-family: 'Cairo'; }
+    th { text-align: left !important; font-family: 'Cairo'; }
+    td { text-align: left !important; font-family: 'Cairo'; }
     
     /* Tabs */
     .stTabs [data-baseweb="tab-list"] { gap: 10px; margin-bottom: 1rem; flex-wrap: wrap; direction: rtl; }
@@ -263,7 +263,7 @@ def show_operations(dfs):
     available_cars = active_fleet_count - active_rentals
     utilization = (active_rentals / active_fleet_count * 100) if active_fleet_count > 0 else 0.0
     
-    st.subheader("📊 نبذة عن الأسطول")
+    st.subheader("📊 ملخص الأسطول")
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("إجمالي السيارات", active_fleet_count)
     k2.metric("إيجارات نشطة", active_rentals)
@@ -543,13 +543,11 @@ def show_crm(dfs):
                 real_name = client_id_map.get(raw_val, raw_val) 
                 if real_name not in client_db:
                     client_db[real_name] = {'Display': f"[?] {real_name}", 'Name': real_name, 'Spend': 0, 'Trips': 0, 'History': []}
-                
                 rec = client_db[real_name]
                 amt = clean_currency(row[col_ord_cost])
                 s = pd.to_datetime(row[col_ord_s], errors='coerce')
                 e = pd.to_datetime(row[col_ord_e], errors='coerce')
                 cid = clean_id_tag(row[col_ord_car])
-                
                 status = "مكتمل"
                 days = 0
                 if pd.notnull(s) and pd.notnull(e):
@@ -612,7 +610,7 @@ def show_crm(dfs):
                 else: st.warning("لا يوجد سجل.")
             else: st.info("👈 اختر عميلاً.")
 
-# --- 8. MODULE 4: FINANCIAL HQ (ADVANCED & LOCALIZED) ---
+# --- 8. MODULE 4: FINANCIAL HQ (MASTER OWNER VIEW) ---
 def show_financial_hq(dfs):
     st.title("💰 الإدارة المالية")
     if not dfs: return
@@ -623,21 +621,26 @@ def show_financial_hq(dfs):
     df_cars = dfs['cars']
 
     with st.expander("🗓️ إعدادات الفترة", expanded=True):
-        f1, f2 = st.columns(2)
+        f1, f2, f3 = st.columns(3)
         period_type = f1.selectbox("نوع العرض", ["شهر", "ربع سنوي", "سنة"], key='fin_p')
         sel_year = f2.selectbox("السنة المالية", [2024, 2025, 2026], index=2, key='fin_y')
-        f3, f4 = st.columns(2)
-        if period_type == "شهر": sel_spec = f3.selectbox("الشهر", range(1, 13), index=0, key='fin_m')
-        elif period_type == "ربع سنوي": sel_spec = f3.selectbox("الربع", [1, 2, 3, 4], index=0, key='fin_q')
+        
+        # New Filter: Calculation Method
+        calc_method = f3.selectbox("طريقة الحساب", ["عن الفترة المحددة", "تراكمي حتى الآن"])
+        
+        f4, f5 = st.columns(2)
+        if period_type == "شهر": sel_spec = f4.selectbox("الشهر", range(1, 13), index=0, key='fin_m')
+        elif period_type == "ربع سنوي": sel_spec = f4.selectbox("الربع", [1, 2, 3, 4], index=0, key='fin_q')
         else: sel_spec = 0
 
     start_date, end_date = get_date_filter_range(period_type, sel_year, sel_spec)
     
-    # 1. CASH FLOW ANALYTICS
-    inflow_data = [] # List of {'Source': 'Rent/Dep', 'Amount': X}
-    expense_data = [] # List of {'Category': 'Maint/Sal', 'Amount': X}
-    
+    # 1. CASH FLOW & P&L
+    inflow_cats = {} # Cat -> Sum
+    expense_cats = {} # Cat -> Sum
     cash_in = 0.0
+    cash_out = 0.0
+    
     col_coll_amt = get_col_by_letter(df_coll, 'R')
     col_coll_y = get_col_by_letter(df_coll, 'Q')
     col_coll_m = get_col_by_letter(df_coll, 'P')
@@ -654,15 +657,15 @@ def show_financial_hq(dfs):
                 if valid:
                     amt = clean_currency(row[col_coll_amt])
                     cash_in += amt
-                    # Categorize (Simple for now, assume Revenue)
-                    inflow_data.append({'Source': 'إيرادات تأجير', 'Amount': amt})
+                    # Default Cat
+                    cat = "تأجير"
+                    inflow_cats[cat] = inflow_cats.get(cat, 0) + amt
             except: continue
 
-    cash_out = 0.0
     col_exp_amt = get_col_by_letter(df_exp, 'X')
     col_exp_y = get_col_by_letter(df_exp, 'W')
     col_exp_m = get_col_by_letter(df_exp, 'V')
-    col_exp_cat = get_col_by_letter(df_exp, 'I') # Type of Expense
+    col_exp_type = get_col_by_letter(df_exp, 'I')
     
     if col_exp_amt:
         for _, row in df_exp.iterrows():
@@ -676,23 +679,20 @@ def show_financial_hq(dfs):
                 if valid: 
                     amt = clean_currency(row[col_exp_amt])
                     cash_out += amt
-                    cat = str(row[col_exp_cat]).strip() if pd.notnull(row[col_exp_cat]) else "نثريات"
-                    expense_data.append({'Category': cat, 'Amount': amt})
+                    cat = str(row[col_exp_type]).strip() if pd.notnull(row[col_exp_type]) else "نثريات"
+                    expense_cats[cat] = expense_cats.get(cat, 0) + amt
             except: continue
 
-    # Car Expenses (Also Cash Out)
+    # Car Expenses (Cash Out)
     col_cexp_amt = get_col_by_letter(df_car_exp, 'Z')
     col_cexp_y = get_col_by_letter(df_car_exp, 'Y')
     col_cexp_m = get_col_by_letter(df_car_exp, 'X')
     col_cexp_car = get_col_by_letter(df_car_exp, 'S')
     col_cexp_id_g = get_col_by_letter(df_car_exp, 'G') 
     
-    # Ledger History Log: List of {Owner, Date, Type, Amount(+/-)}
+    # Ledger Data
     ledger_history = [] 
     
-    # Pre-calculated Owner Totals for "Select All" view
-    owner_totals = {} # Name -> {Dues:0, Paid:0, Maint:0, Brokerage:0}
-
     if col_cexp_amt:
         for _, row in df_car_exp.iterrows():
             try:
@@ -707,30 +707,32 @@ def show_financial_hq(dfs):
                 elif period_type=="ربع سنوي":
                     if y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]: is_in_period=True
                 
+                # Cash Flow Logic
                 if is_in_period: 
                     cash_out += amt
                     cat_name = "مصروفات سيارة"
                     if type_id in ['3','4']: cat_name = "صيانة / مخالفات"
                     elif type_id == '1': cat_name = "دفعات تعاقد"
-                    expense_data.append({'Category': cat_name, 'Amount': amt})
+                    elif type_id == '8': cat_name = "عمولات"
+                    expense_cats[cat_name] = expense_cats.get(cat_name, 0) + amt
 
-                # LEDGER LOGGING
-                # We need to map CID to Owner Name later. Store CID for now.
-                # Only log items relevant to Owner Balance (Contracting Paid, Maint Deducted)
+                # LEDGER LOGIC (Lifetime or Period based on Filter?)
+                # Actually, the Ledger History Table should show *Transactions*.
+                # The Balance Calculation depends on the filter "Cumulative" vs "Period".
                 
-                txn_date = f"{y}-{m:02d}-28" # Approx date
+                # Store all transactions, we will filter later based on user choice
+                txn_date = datetime(y, m, 28)
                 
-                if type_id == '1': # Contracting Payment (DEBIT OWNER)
-                    ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'دفع تعاقد', 'Amount': -amt})
-                elif type_id == '8': # Brokerage Payment (DEBIT OWNER or IGNORE if it was Accrual, user said it's paid to owner)
-                    # Assuming this is cash OUT to owner
-                    ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'دفع عمولة', 'Amount': -amt})
-                elif type_id in ['3', '4']: # Maint/Fines (DEBIT OWNER - We paid, they owe us back, so it reduces what we owe them)
-                    ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'خصم صيانة', 'Amount': -amt})
+                if type_id == '1': # Contracting Payment -> DEBIT
+                    ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'دفع تعاقد', 'Amount': -amt, 'Cat': 'Paid'})
+                elif type_id == '8': # Brokerage Payment -> DEBIT
+                    ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'دفع عمولة', 'Amount': -amt, 'Cat': 'Paid'})
+                elif type_id in ['3', '4']: # Maint/Fines -> DEBIT (Deduction)
+                    ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'خصم صيانة', 'Amount': -amt, 'Cat': 'Deduction'})
 
             except: continue
 
-    # 3. OWNER ACCRUALS (Contracting Dues)
+    # Generate Accruals (CREDIT)
     col_code = get_col_by_letter(df_cars, 'A')
     col_owner_f = get_col_by_letter(df_cars, 'BP')
     col_owner_l = get_col_by_letter(df_cars, 'BQ')
@@ -739,20 +741,21 @@ def show_financial_hq(dfs):
     col_pay_freq = get_col_by_letter(df_cars, 'CK') 
     col_deduct_pct = get_col_by_letter(df_cars, 'CL') 
     col_brokerage = get_col_by_letter(df_cars, 'CM') 
+    col_plate = get_col_by_letter(df_cars, 'AC')
+    plate_cols = ['AC','AB','AA','Z','Y','X','W']
     
-    # Map CID to Owner Name
-    cid_to_name = {}
+    cid_to_meta = {} # CID -> {Owner, CarName, Plate}
 
     for _, car in df_cars.iterrows():
         try:
             cid = clean_id_tag(car[col_code])
             owner_name = f"{car[col_owner_f]} {car[col_owner_l]}".strip()
             if not owner_name: owner_name = f"Owner {cid}"
-            cid_to_name[cid] = owner_name
             
-            # Calculate Accrued Dues (LIFETIME logic to get true balance, or Period logic for P&L)
-            # For "Owner Statement" typically we want All History to get Balance.
-            # I will generate "Due" entries for every month since contract start.
+            cname = f"{car[get_col_by_letter(df_cars, 'B')]} {car[get_col_by_letter(df_cars, 'E')]}"
+            plate = "".join([str(car[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(car[get_col_by_letter(df_cars, p)])])
+            
+            cid_to_meta[cid] = {'Owner': owner_name, 'Car': cname, 'Plate': plate.strip()}
             
             s_date = pd.to_datetime(car[col_contract_start], errors='coerce')
             if pd.isna(s_date): continue
@@ -763,19 +766,19 @@ def show_financial_hq(dfs):
             deduct_pct = clean_currency(car[col_deduct_pct])
             brokerage = clean_currency(car[col_brokerage])
             
+            # Generate Accruals up to NOW
             curr_date = s_date
-            while curr_date < datetime.now():
-                # Add Accrual Record
+            while curr_date < datetime.now() + timedelta(days=30): # Generate slightly ahead
                 gross = base_fee
                 net = gross * (1 - (deduct_pct/100)) + brokerage
                 
                 ledger_history.append({
                     'CID': cid,
-                    'Date': curr_date.strftime("%Y-%m-%d"),
+                    'Date': curr_date,
                     'Type': 'استحقاق تعاقد',
-                    'Amount': net
+                    'Amount': net,
+                    'Cat': 'Due'
                 })
-                # Move to next payment date
                 curr_date += timedelta(days=freq_days)
                 
         except: continue
@@ -784,110 +787,138 @@ def show_financial_hq(dfs):
     tab1, tab2, tab3 = st.tabs(["التدفق النقدي", "الأرباح والخسائر", "كشف حساب الملاك"])
     
     with tab1:
+        # Category Sums Row (New)
+        cat_cols = st.columns(4)
+        cat_cols[0].metric("دفعات تعاقد", format_egp(expense_cats.get("دفعات تعاقد", 0)))
+        cat_cols[1].metric("صيانة / مخالفات", format_egp(expense_cats.get("صيانة / مخالفات", 0)))
+        cat_cols[2].metric("نثريات / تشغيل", format_egp(sum(v for k,v in expense_cats.items() if k not in ["دفعات تعاقد", "صيانة / مخالفات"])))
+        cat_cols[3].metric("عمولات", format_egp(expense_cats.get("عمولات", 0)))
+        
+        st.divider()
+        
         net = cash_in - cash_out
         c1, c2, c3 = st.columns(3)
         c1.metric("وارد", format_egp(cash_in))
         c2.metric("صادر", format_egp(cash_out), delta_color="inverse")
         c3.metric("الصافي", format_egp(net), delta_color="normal" if net>=0 else "inverse")
         
-        # Charts
         chart1, chart2 = st.columns(2)
         with chart1:
-            st.markdown("##### مصادر الدخل")
-            if inflow_data:
-                df_in = pd.DataFrame(inflow_data)
+            if inflow_cats:
+                df_in = pd.DataFrame(list(inflow_cats.items()), columns=['Source', 'Amount'])
                 fig_in = px.pie(df_in, values='Amount', names='Source', hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
                 fig_in.update_layout(height=300, margin=dict(t=0, b=0), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117")
                 st.plotly_chart(fig_in, use_container_width=True)
-            else: st.info("لا توجد بيانات دخل.")
-            
         with chart2:
-            st.markdown("##### توزيع المصروفات")
-            if expense_data:
-                df_out = pd.DataFrame(expense_data)
+            if expense_cats:
+                df_out = pd.DataFrame(list(expense_cats.items()), columns=['Category', 'Amount'])
                 fig_out = px.bar(df_out, x='Category', y='Amount', color='Category')
                 fig_out.update_layout(height=300, margin=dict(t=0, b=0), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", showlegend=False)
                 st.plotly_chart(fig_out, use_container_width=True)
-            else: st.info("لا توجد مصروفات.")
 
     with tab2:
-        rev = cash_in # Simplification
-        # Calculate Contracting Cost from Expense Data (Category 'دفعات تعاقد')
-        contract_cost = sum([x['Amount'] for x in expense_data if 'تعاقد' in x['Category']])
-        maint_cost = sum([x['Amount'] for x in expense_data if 'صيانة' in x['Category']])
+        rev = cash_in
+        contract_cost = expense_cats.get("دفعات تعاقد", 0)
+        maint_cost = expense_cats.get("صيانة / مخالفات", 0)
         other_cost = cash_out - contract_cost - maint_cost
-        
         profit = rev - cash_out
         
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("الإيرادات", format_egp(rev))
-        k2.metric("تكلفة التعاقد", format_egp(contract_cost))
-        k3.metric("مصاريف تشغيل", format_egp(other_cost))
-        k4.metric("الربح الصافي", format_egp(profit))
-        
-        st.markdown("##### هيكل التكاليف")
+        # High Contrast Sankey
         fig_pl = go.Figure(data=[go.Sankey(
             node = dict(
+              pad = 15, thickness = 20,
+              line = dict(color = "white", width = 0.5),
               label = ["الإيرادات", "الربح", "التكاليف", "ملاك", "تشغيل", "صيانة"],
-              color = "blue"
+              color = ["#2ecc71", "#27ae60", "#e74c3c", "#c0392b", "#d35400", "#f39c12"]
             ),
             link = dict(
-              source = [0, 0, 2, 2, 2], # indices match labels
+              source = [0, 0, 2, 2, 2], 
               target = [1, 2, 3, 4, 5],
               value = [max(0, profit), cash_out, contract_cost, other_cost, maint_cost]
           ))])
-        fig_pl.update_layout(height=400, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117")
+        fig_pl.update_layout(height=400, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white", size=14))
         st.plotly_chart(fig_pl, use_container_width=True)
 
     with tab3:
-        # Prepare Dataframe for Selection
-        # Group ledger_history by Owner Name (using cid_to_name)
-        
-        df_hist = pd.DataFrame(ledger_history)
-        if not df_hist.empty:
-            df_hist['Owner'] = df_hist['CID'].map(cid_to_name).fillna("Unknown")
+        # Prepare Master Data based on Filter
+        df_all = pd.DataFrame(ledger_history)
+        if not df_all.empty:
+            # Map Metadata
+            df_all['Owner'] = df_all['CID'].map(lambda x: cid_to_meta.get(x, {}).get('Owner', 'Unknown'))
+            df_all['Car'] = df_all['CID'].map(lambda x: cid_to_meta.get(x, {}).get('Car', ''))
+            df_all['Plate'] = df_all['CID'].map(lambda x: cid_to_meta.get(x, {}).get('Plate', ''))
             
-            # Select Owner
-            owners_list = ["كل الملاك"] + sorted(df_hist['Owner'].unique().tolist())
+            # Apply Date Filter
+            if calc_method == "عن الفترة المحددة":
+                mask = (df_all['Date'] >= start_date) & (df_all['Date'] <= end_date)
+                df_filtered = df_all[mask].copy()
+            else: # Cumulative
+                # Only filter transactions up to TODAY (don't show future accruals)
+                df_filtered = df_all[df_all['Date'] <= datetime.now()].copy()
+
+            # Selection UI
+            owners_list = ["كل الملاك"] + sorted(df_filtered['Owner'].unique().tolist())
             selected_owner = st.selectbox("اختر المالك", owners_list)
             
+            # Calculate Summaries
             if selected_owner == "كل الملاك":
-                # Show Summary Table
-                summary = df_hist.groupby('Owner')['Amount'].sum().reset_index()
-                summary.columns = ['المالك', 'الرصيد الحالي']
-                summary['الرصيد الحالي'] = summary['الرصيد الحالي'].apply(format_egp)
-                st.dataframe(summary, use_container_width=True)
-            else:
-                # Filter for Owner
-                owner_data = df_hist[df_hist['Owner'] == selected_owner].copy()
-                owner_data['Date'] = pd.to_datetime(owner_data['Date'])
-                owner_data = owner_data.sort_values('Date')
+                # Master Summary Table
+                # Group by Owner -> Sum Dues, Sum Paid, Balance
+                summary = df_filtered.groupby('Owner').agg(
+                    Due=('Amount', lambda x: x[x>0].sum()),
+                    Paid=('Amount', lambda x: x[x<0].sum()),
+                    Balance=('Amount', 'sum')
+                ).reset_index()
                 
-                # Calculate Running Balance
-                owner_data['R_Balance'] = owner_data['Amount'].cumsum()
-                
-                # Summary Metrics for this Owner
-                total_dues = owner_data[owner_data['Amount'] > 0]['Amount'].sum()
-                total_paid = owner_data[owner_data['Amount'] < 0]['Amount'].sum()
-                final_bal = owner_data.iloc[-1]['R_Balance']
+                # Grand Totals at Top
+                g_due = summary['Due'].sum()
+                g_paid = abs(summary['Paid'].sum())
+                g_bal = summary['Balance'].sum()
                 
                 m1, m2, m3 = st.columns(3)
-                m1.metric("إجمالي المستحقات (+)", format_egp(total_dues))
-                m2.metric("إجمالي المدفوعات/الخصم (-)", format_egp(abs(total_paid)))
-                m3.metric("الرصيد النهائي", format_egp(final_bal), delta_color="normal" if final_bal>0 else "inverse")
+                m1.metric("إجمالي المستحقات (للكل)", format_egp(g_due))
+                m2.metric("إجمالي المدفوعات (للكل)", format_egp(g_paid))
+                m3.metric("الرصيد المعلق (للكل)", format_egp(g_bal), delta_color="normal" if g_bal>0 else "inverse")
+                
+                st.divider()
+                st.markdown("##### تفاصيل الملاك")
+                
+                # Add Car details to summary? (One owner might have multiple cars)
+                # Let's show a flat list of cars instead
+                
+                flat_summary = df_filtered.groupby(['Owner', 'CID', 'Car', 'Plate']).agg(
+                    Balance=('Amount', 'sum')
+                ).reset_index()
+                
+                flat_summary['Balance'] = flat_summary['Balance'].apply(format_egp)
+                st.dataframe(flat_summary, use_container_width=True)
+                
+            else:
+                # Specific Owner View
+                owner_df = df_filtered[df_filtered['Owner'] == selected_owner].copy()
+                owner_df = owner_df.sort_values('Date')
+                owner_df['Running_Balance'] = owner_df['Amount'].cumsum()
+                
+                # Metrics
+                dues = owner_df[owner_df['Amount'] > 0]['Amount'].sum()
+                paid = owner_df[owner_df['Amount'] < 0]['Amount'].sum()
+                bal = owner_df.iloc[-1]['Running_Balance']
+                
+                k1, k2, k3 = st.columns(3)
+                k1.metric("إجمالي المستحق", format_egp(dues))
+                k2.metric("إجمالي المدفوع", format_egp(abs(paid)))
+                k3.metric("الرصيد الحالي", format_egp(bal), delta_color="normal" if bal>0 else "inverse")
                 
                 st.markdown("##### سجل المعاملات التفصيلي")
                 
-                # Format Table
-                display_df = owner_data[['Date', 'Type', 'Amount', 'R_Balance']].copy()
-                display_df.columns = ['التاريخ', 'البيان', 'القيمة', 'الرصيد']
-                display_df['القيمة'] = display_df['القيمة'].apply(format_egp)
-                display_df['الرصيد'] = display_df['الرصيد'].apply(format_egp)
-                display_df['التاريخ'] = display_df['التاريخ'].dt.strftime('%Y-%m-%d')
+                # Formatting
+                display = owner_df[['Date', 'Car', 'Type', 'Amount', 'Running_Balance']].copy()
+                display.columns = ['التاريخ', 'السيارة', 'البيان', 'القيمة', 'الرصيد']
+                display['القيمة'] = display['القيمة'].apply(format_egp)
+                display['الرصيد'] = display['الرصيد'].apply(format_egp)
+                display['التاريخ'] = display['التاريخ'].dt.strftime('%Y-%m-%d')
                 
-                st.dataframe(display_df, use_container_width=True)
-        else:
-            st.info("لا توجد بيانات مالية للملاك.")
+                st.dataframe(display, use_container_width=True)
 
 # --- 9. MODULE 5: RISK RADAR ---
 def show_risk_radar(dfs):
