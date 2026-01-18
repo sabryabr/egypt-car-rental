@@ -146,6 +146,22 @@ def clean_currency(x):
 def format_egp(x):
     return f"{x:,.0f} ج.م"
 
+def parse_ar_date(x):
+    """
+    Robust date parser that handles Arabic AM/PM (صباحًا/مساءً).
+    """
+    if pd.isna(x): return pd.NaT
+    s = str(x).strip()
+    
+    # Replace Arabic time suffixes with English
+    s = s.replace("صباحًا", "AM").replace("مساءً", "PM")
+    s = s.replace("ص", "AM").replace("م", "PM")
+    
+    try:
+        return pd.to_datetime(s)
+    except:
+        return pd.NaT
+
 def get_date_filter_range(period_type, year, specifier):
     if period_type == "سنة":
         return datetime(year, 1, 1), datetime(year, 12, 31, 23, 59, 59)
@@ -192,8 +208,10 @@ def show_operations(dfs):
         for _, row in df_orders.iterrows():
             try:
                 cid = clean_id_tag(row[col_car_ord])
-                s = pd.to_datetime(row[col_start], errors='coerce')
-                e = pd.to_datetime(row[col_end], errors='coerce')
+                # USE NEW PARSER
+                s = parse_ar_date(row[col_start])
+                e = parse_ar_date(row[col_end])
+                
                 if pd.notnull(s) and pd.notnull(e):
                     if s <= today <= e:
                         car_status_map[cid] = "🔴" 
@@ -239,8 +257,10 @@ def show_operations(dfs):
     if col_start and col_end and col_car_ord:
         for _, row in df_orders.iterrows():
             try:
-                s_date = pd.to_datetime(row[col_start], errors='coerce')
-                e_date = pd.to_datetime(row[col_end], errors='coerce')
+                # USE NEW PARSER
+                s_date = parse_ar_date(row[col_start])
+                e_date = parse_ar_date(row[col_end])
+                
                 if pd.isna(s_date) or pd.isna(e_date): continue
                 if not (s_date <= end_range and e_date >= start_range): continue
 
@@ -365,8 +385,9 @@ def show_vehicle_360(dfs):
         for _, row in df_orders.iterrows():
             cid = clean_id_tag(row[col_ord_car])
             if cid in selected_ids:
-                d_s = pd.to_datetime(row[col_ord_start], errors='coerce')
-                d_e = pd.to_datetime(row[col_ord_end], errors='coerce')
+                # USE NEW PARSER
+                d_s = parse_ar_date(row[col_ord_start])
+                d_e = parse_ar_date(row[col_ord_end])
                 
                 if pd.notnull(d_s) and start_range <= d_s <= end_range:
                     rev = clean_currency(row[col_ord_cost])
@@ -545,8 +566,9 @@ def show_crm(dfs):
                     client_db[real_name] = {'Display': f"[?] {real_name}", 'Name': real_name, 'Spend': 0, 'Trips': 0, 'History': []}
                 rec = client_db[real_name]
                 amt = clean_currency(row[col_ord_cost])
-                s = pd.to_datetime(row[col_ord_s], errors='coerce')
-                e = pd.to_datetime(row[col_ord_e], errors='coerce')
+                # USE NEW PARSER
+                s = parse_ar_date(row[col_ord_s])
+                e = parse_ar_date(row[col_ord_e])
                 cid = clean_id_tag(row[col_ord_car])
                 status = "مكتمل"
                 days = 0
@@ -610,7 +632,7 @@ def show_crm(dfs):
                 else: st.warning("لا يوجد سجل.")
             else: st.info("👈 اختر عميلاً.")
 
-# --- 8. MODULE 4: FINANCIAL HQ (ADVANCED LEDGER + VISUALS) ---
+# --- 8. MODULE 4: FINANCIAL HQ (ADVANCED LEDGER) ---
 def show_financial_hq(dfs):
     st.title("💰 الإدارة المالية")
     if not dfs: return
@@ -656,9 +678,8 @@ def show_financial_hq(dfs):
                     if y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]: valid=True
                 if valid:
                     amt = clean_currency(row[col_coll_amt])
+                    inflow.append({"Amount": amt, "Category": "Revenue"})
                     cash_in += amt
-                    cat = "تأجير"
-                    inflow_cats[cat] = inflow_cats.get(cat, 0) + amt
             except: continue
 
     col_exp_amt = get_col_by_letter(df_exp, 'X')
@@ -912,7 +933,7 @@ def show_financial_hq(dfs):
         else:
             st.info("لا توجد بيانات مالية.")
 
-# --- 9. MODULE 5: RISK RADAR (CAR CODE + PLATE + ACTIVE CHECK FIX) ---
+# --- 9. MODULE 5: RISK RADAR ---
 def show_risk_radar(dfs):
     st.title("⚠️ رادار المخاطر")
     if not dfs: return
