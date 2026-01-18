@@ -147,16 +147,10 @@ def format_egp(x):
     return f"{x:,.0f} ج.م"
 
 def parse_ar_date(x):
-    """
-    Robust date parser that handles Arabic AM/PM (صباحًا/مساءً).
-    """
     if pd.isna(x): return pd.NaT
     s = str(x).strip()
-    
-    # Replace Arabic time suffixes with English
     s = s.replace("صباحًا", "AM").replace("مساءً", "PM")
     s = s.replace("ص", "AM").replace("م", "PM")
-    
     try:
         return pd.to_datetime(s)
     except:
@@ -208,10 +202,8 @@ def show_operations(dfs):
         for _, row in df_orders.iterrows():
             try:
                 cid = clean_id_tag(row[col_car_ord])
-                # USE NEW PARSER
                 s = parse_ar_date(row[col_start])
                 e = parse_ar_date(row[col_end])
-                
                 if pd.notnull(s) and pd.notnull(e):
                     if s <= today <= e:
                         car_status_map[cid] = "🔴" 
@@ -257,11 +249,12 @@ def show_operations(dfs):
     if col_start and col_end and col_car_ord:
         for _, row in df_orders.iterrows():
             try:
-                # USE NEW PARSER
                 s_date = parse_ar_date(row[col_start])
                 e_date = parse_ar_date(row[col_end])
                 
                 if pd.isna(s_date) or pd.isna(e_date): continue
+                # FIX: Inclusive Overlap Logic
+                # (StartA <= EndB) and (EndA >= StartB)
                 if not (s_date <= end_range and e_date >= start_range): continue
 
                 car_id_clean = clean_id_tag(row[col_car_ord])
@@ -385,7 +378,6 @@ def show_vehicle_360(dfs):
         for _, row in df_orders.iterrows():
             cid = clean_id_tag(row[col_ord_car])
             if cid in selected_ids:
-                # USE NEW PARSER
                 d_s = parse_ar_date(row[col_ord_start])
                 d_e = parse_ar_date(row[col_ord_end])
                 
@@ -566,7 +558,6 @@ def show_crm(dfs):
                     client_db[real_name] = {'Display': f"[?] {real_name}", 'Name': real_name, 'Spend': 0, 'Trips': 0, 'History': []}
                 rec = client_db[real_name]
                 amt = clean_currency(row[col_ord_cost])
-                # USE NEW PARSER
                 s = parse_ar_date(row[col_ord_s])
                 e = parse_ar_date(row[col_ord_e])
                 cid = clean_id_tag(row[col_ord_car])
@@ -632,7 +623,7 @@ def show_crm(dfs):
                 else: st.warning("لا يوجد سجل.")
             else: st.info("👈 اختر عميلاً.")
 
-# --- 8. MODULE 4: FINANCIAL HQ (ADVANCED LEDGER) ---
+# --- 8. MODULE 4: FINANCIAL HQ (ADVANCED LEDGER + VISUALS) ---
 def show_financial_hq(dfs):
     st.title("💰 الإدارة المالية")
     if not dfs: return
@@ -678,8 +669,9 @@ def show_financial_hq(dfs):
                     if y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]: valid=True
                 if valid:
                     amt = clean_currency(row[col_coll_amt])
-                    inflow.append({"Amount": amt, "Category": "Revenue"})
                     cash_in += amt
+                    cat = "تأجير"
+                    inflow_cats[cat] = inflow_cats.get(cat, 0) + amt
             except: continue
 
     col_exp_amt = get_col_by_letter(df_exp, 'X')
@@ -762,6 +754,9 @@ def show_financial_hq(dfs):
     
     cid_to_meta = {} 
 
+    # FIX: Generate Accruals into FUTURE
+    future_limit = datetime(sel_year + 2, 12, 31) # Look ahead ~2 years
+
     for _, car in df_cars.iterrows():
         try:
             # Active check CASE INSENSITIVE
@@ -791,7 +786,7 @@ def show_financial_hq(dfs):
             
             # Generate Accruals
             curr_date = s_date
-            while curr_date < datetime.now() + timedelta(days=30):
+            while curr_date < future_limit:
                 gross = base_fee
                 net = gross * (1 - (deduct_pct/100)) + brokerage
                 
@@ -933,7 +928,7 @@ def show_financial_hq(dfs):
         else:
             st.info("لا توجد بيانات مالية.")
 
-# --- 9. MODULE 5: RISK RADAR ---
+# --- 9. MODULE 5: RISK RADAR (CAR CODE + PLATE + ACTIVE CHECK FIX) ---
 def show_risk_radar(dfs):
     st.title("⚠️ رادار المخاطر")
     if not dfs: return
@@ -988,7 +983,9 @@ def show_risk_radar(dfs):
                     if days <= 90: bucket = "خطر مرتفع (0-3 أشهر)"
                     elif days <= 180: bucket = "خطر متوسط (3-6 أشهر)"
                     elif days > 180: bucket = "خطر منخفض (> 6 أشهر)"
-                    if bucket: risks['License'].append({'السيارة': cname, 'اللوحة': plate, 'السبب': reason, 'الاستحقاق': target.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
+                    
+                    if bucket:
+                        risks['License'].append({'السيارة': cname, 'اللوحة': plate, 'السبب': reason, 'الاستحقاق': target.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
 
             # INSURANCE
             has_ins = False
