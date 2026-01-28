@@ -4,9 +4,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 import os
 import string
 import re
+import time
 from datetime import datetime, timedelta
 import calendar
 
@@ -52,7 +54,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. محرك البيانات (DATA ENGINE) ---
+# --- 3. محرك البيانات (DATA ENGINE - ROBUST) ---
 @st.cache_data(ttl=300)
 def load_data_v3():
     if "gcp_service_account" not in st.secrets:
@@ -65,36 +67,47 @@ def load_data_v3():
     service = build('sheets', 'v4', credentials=creds)
 
     def fetch_sheet(sheet_id, range_name, header_row=0):
-        try:
-            result = service.spreadsheets().values().get(spreadsheetId=sheet_id, range=range_name).execute()
-            vals = result.get('values', [])
-            if not vals: return pd.DataFrame()
-            if len(vals) > header_row:
-                headers = vals[header_row]
-                data = vals[header_row+1:]
-                clean_headers = []
-                seen = {}
-                for i, h in enumerate(headers):
-                    h_str = str(h).strip()
-                    if not h_str: h_str = f"Col_{i}"
-                    if h_str in seen:
-                        seen[h_str] += 1
-                        clean_headers.append(f"{h_str}_{seen[h_str]}")
-                    else:
-                        seen[h_str] = 0
-                        clean_headers.append(h_str)
-                target_len = len(clean_headers)
-                clean_data = []
-                for row in data:
-                    row_fixed = row[:target_len] 
-                    if len(row_fixed) < target_len:
-                        row_fixed += [None] * (target_len - len(row_fixed))
-                    clean_data.append(row_fixed)
-                return pd.DataFrame(clean_data, columns=clean_headers)
-            return pd.DataFrame()
-        except Exception as e:
-            st.warning(f"⚠️ خطأ في التحميل ({range_name}): {str(e)}")
-            return pd.DataFrame()
+        # Retry logic for 503 Errors
+        for attempt in range(3):
+            try:
+                result = service.spreadsheets().values().get(spreadsheetId=sheet_id, range=range_name).execute()
+                vals = result.get('values', [])
+                if not vals: return pd.DataFrame()
+                if len(vals) > header_row:
+                    headers = vals[header_row]
+                    data = vals[header_row+1:]
+                    clean_headers = []
+                    seen = {}
+                    for i, h in enumerate(headers):
+                        h_str = str(h).strip()
+                        if not h_str: h_str = f"Col_{i}"
+                        if h_str in seen:
+                            seen[h_str] += 1
+                            clean_headers.append(f"{h_str}_{seen[h_str]}")
+                        else:
+                            seen[h_str] = 0
+                            clean_headers.append(h_str)
+                    target_len = len(clean_headers)
+                    clean_data = []
+                    for row in data:
+                        row_fixed = row[:target_len] 
+                        if len(row_fixed) < target_len:
+                            row_fixed += [None] * (target_len - len(row_fixed))
+                        clean_data.append(row_fixed)
+                    return pd.DataFrame(clean_data, columns=clean_headers)
+                return pd.DataFrame()
+            
+            except HttpError as e:
+                if e.resp.status in [429, 500, 503]:
+                    time.sleep(2 ** attempt) 
+                    continue
+                else:
+                    st.warning(f"⚠️ خطأ في التحميل ({range_name}): {str(e)}")
+                    return pd.DataFrame()
+            except Exception as e:
+                st.warning(f"⚠️ خطأ غير متوقع ({range_name}): {str(e)}")
+                return pd.DataFrame()
+        return pd.DataFrame()
 
     IDS = {
         'cars': "1tQVkPj7tCnrKsHEIs04a1WzzC04jpOWuLsXgXOkVMkk",
@@ -253,8 +266,6 @@ def show_operations(dfs):
                 e_date = parse_ar_date(row[col_end])
                 
                 if pd.isna(s_date) or pd.isna(e_date): continue
-                # FIX: Inclusive Overlap Logic
-                # (StartA <= EndB) and (EndA >= StartB)
                 if not (s_date <= end_range and e_date >= start_range): continue
 
                 car_id_clean = clean_id_tag(row[col_car_ord])
@@ -623,7 +634,7 @@ def show_crm(dfs):
                 else: st.warning("لا يوجد سجل.")
             else: st.info("👈 اختر عميلاً.")
 
-# --- 8. MODULE 4: FINANCIAL HQ (ADVANCED LEDGER + VISUALS) ---
+# --- 8. MODULE 4: FINANCIAL HQ (ADVANCED LEDGER + AUDIT) ---
 def show_financial_hq(dfs):
     st.title("💰 الإدارة المالية")
     if not dfs: return
@@ -636,7 +647,7 @@ def show_financial_hq(dfs):
     with st.expander("🗓️ إعدادات الفترة", expanded=True):
         f1, f2, f3 = st.columns(3)
         period_type = f1.selectbox("نوع العرض", ["شهر", "ربع سنوي", "سنة"], key='fin_p')
-        sel_year = f2.selectbox("السنة المالية", [2024, 2025, 2026], index=2, key='fin_y')
+        sel_year = f2.selectbox("السنة المالية", [2024, 2025, 2026, 2027], index=2, key='fin_y')
         
         # New Filter: Calculation Method
         calc_method = f3.selectbox("طريقة الحساب", ["عن الفترة المحددة", "تراكمي حتى الآن"])
@@ -658,6 +669,10 @@ def show_financial_hq(dfs):
     col_coll_y = get_col_by_letter(df_coll, 'Q')
     col_coll_m = get_col_by_letter(df_coll, 'P')
     
+    # Track Security Deposits for Audit Tab
+    deposits_collected = 0.0
+    deposits_refunded = 0.0
+    
     if col_coll_amt:
         for _, row in df_coll.iterrows():
             try:
@@ -670,6 +685,9 @@ def show_financial_hq(dfs):
                 if valid:
                     amt = clean_currency(row[col_coll_amt])
                     cash_in += amt
+                    
+                    # Logic to identify deposits? Assuming 'Expense Statement' (Col I) might hold clues
+                    # For now, put all in 'Rental' unless specified
                     cat = "تأجير"
                     inflow_cats[cat] = inflow_cats.get(cat, 0) + amt
             except: continue
@@ -704,6 +722,9 @@ def show_financial_hq(dfs):
     
     ledger_history = [] 
     
+    # Audit Breakdown
+    contracting_audit = {} # CID -> {Due:0, Paid:0}
+    
     if col_cexp_amt:
         for _, row in df_car_exp.iterrows():
             try:
@@ -724,12 +745,20 @@ def show_financial_hq(dfs):
                     if type_id in ['3','4']: cat_name = "صيانة / مخالفات"
                     elif type_id == '1': cat_name = "دفعات تعاقد"
                     elif type_id == '8': cat_name = "عمولات"
+                    elif type_id == '7': 
+                        cat_name = "رد تأمين"
+                        deposits_refunded += amt
+                    
                     expense_cats[cat_name] = expense_cats.get(cat_name, 0) + amt
 
                 txn_date = datetime(y, m, 28)
                 
                 if type_id == '1': # Contracting Payment
                     ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'دفع تعاقد', 'Amount': -amt, 'Sort': 2, 'Icon': '⬇️🔴'})
+                    if is_in_period:
+                        if cid not in contracting_audit: contracting_audit[cid] = {'Due': 0, 'Paid': 0}
+                        contracting_audit[cid]['Paid'] += amt
+                        
                 elif type_id == '8': # Brokerage Payment
                     ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'دفع عمولة', 'Amount': -amt, 'Sort': 2, 'Icon': '⬇️🔴'})
                 elif type_id in ['3', '4']: # Maint/Fines
@@ -737,7 +766,7 @@ def show_financial_hq(dfs):
 
             except: continue
 
-    # Generate Accruals
+    # Generate Accruals (FUTURE FIX)
     col_code = get_col_by_letter(df_cars, 'A')
     col_owner_f = get_col_by_letter(df_cars, 'BP')
     col_owner_l = get_col_by_letter(df_cars, 'BQ')
@@ -754,12 +783,11 @@ def show_financial_hq(dfs):
     
     cid_to_meta = {} 
 
-    # FIX: Generate Accruals into FUTURE
-    future_limit = datetime(sel_year + 2, 12, 31) # Look ahead ~2 years
+    # FIX: Generate Accruals into FUTURE (Until end of selected year + margin)
+    future_limit = datetime(sel_year, 12, 31) 
 
     for _, car in df_cars.iterrows():
         try:
-            # Active check CASE INSENSITIVE
             status_val = str(car[col_status]).lower()
             if not any(x in status_val for x in ['valid', 'active', 'ساري']): continue
             
@@ -771,9 +799,8 @@ def show_financial_hq(dfs):
             plate = "".join([str(car[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(car[get_col_by_letter(df_cars, p)])])
             yr = str(car[col_model_yr])
             
-            # Combine for search
             search_key = f"[{cid}] {owner_name} - {cname} ({yr}) | {plate.strip()}"
-            cid_to_meta[cid] = {'Label': search_key, 'Owner': owner_name}
+            cid_to_meta[cid] = {'Label': search_key, 'Owner': owner_name, 'Car': cname}
             
             s_date = pd.to_datetime(car[col_contract_start], errors='coerce')
             if pd.isna(s_date): continue
@@ -784,9 +811,8 @@ def show_financial_hq(dfs):
             deduct_pct = clean_currency(car[col_deduct_pct])
             brokerage = clean_currency(car[col_brokerage])
             
-            # Generate Accruals
             curr_date = s_date
-            while curr_date < future_limit:
+            while curr_date <= future_limit:
                 gross = base_fee
                 net = gross * (1 - (deduct_pct/100)) + brokerage
                 
@@ -798,12 +824,18 @@ def show_financial_hq(dfs):
                     'Sort': 1,
                     'Icon': '📄'
                 })
+                
+                # Audit Logic (Check if this accrual falls in selected period)
+                if start_date <= curr_date <= end_date:
+                    if cid not in contracting_audit: contracting_audit[cid] = {'Due': 0, 'Paid': 0}
+                    contracting_audit[cid]['Due'] += net
+                
                 curr_date += timedelta(days=freq_days)
                 
         except: continue
 
     # TABS
-    tab1, tab2, tab3 = st.tabs(["التدفق النقدي", "الأرباح والخسائر", "كشف حساب الملاك"])
+    tab1, tab2, tab3, tab4 = st.tabs(["التدفق النقدي", "الأرباح والخسائر", "كشف حساب الملاك", "التفاصيل والمراجعة"])
     
     with tab1:
         cat_cols = st.columns(4)
@@ -835,7 +867,6 @@ def show_financial_hq(dfs):
                 st.plotly_chart(fig_out, use_container_width=True)
 
     with tab2:
-        # BETTER VISUALIZATION (Waterfall)
         rev = cash_in
         items = [('الإيرادات', rev)]
         for k, v in expense_cats.items():
@@ -844,10 +875,8 @@ def show_financial_hq(dfs):
         df_waterfall = pd.DataFrame(items, columns=['Category', 'Amount'])
         df_waterfall['Color'] = df_waterfall['Amount'].apply(lambda x: 'green' if x > 0 else 'red')
         
-        # Calculate Net
         net_profit = df_waterfall['Amount'].sum()
         
-        # Metrics
         k1, k2 = st.columns(2)
         k1.metric("الإيرادات", format_egp(rev))
         k2.metric("صافي الربح", format_egp(net_profit), delta_color="normal" if net_profit>=0 else "inverse")
@@ -866,20 +895,16 @@ def show_financial_hq(dfs):
         st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        # Prepare Master Data based on Filter
         df_all = pd.DataFrame(ledger_history)
         if not df_all.empty:
-            # Map Metadata
             df_all['Search_Label'] = df_all['CID'].map(lambda x: cid_to_meta.get(x, {}).get('Label', 'Unknown'))
             
-            # Apply Date Filter
             if calc_method == "عن الفترة المحددة":
                 mask = (df_all['Date'] >= start_date) & (df_all['Date'] <= end_date)
                 df_filtered = df_all[mask].copy()
-            else: # Cumulative
+            else: 
                 df_filtered = df_all[df_all['Date'] <= datetime.now()].copy()
 
-            # Selection UI: Checkbox + Multiselect
             col_sel1, col_sel2 = st.columns([1, 3])
             with col_sel1:
                 select_all = st.checkbox("تحديد الكل", value=True)
@@ -894,33 +919,25 @@ def show_financial_hq(dfs):
                     selected_labels = st.multiselect("اختر المالكين/السيارات", options=all_options)
 
             if selected_labels:
-                # Filter Data
                 final_data = df_filtered[df_filtered['Search_Label'].isin(selected_labels)].copy()
                 final_data = final_data.sort_values(['Date', 'Sort'])
                 
-                # Grand Totals
                 total_due = final_data[final_data['Amount'] > 0]['Amount'].sum()
                 total_paid = final_data[final_data['Amount'] < 0]['Amount'].sum()
                 net_bal = total_due + total_paid
                 
-                # Metrics Row
                 m1, m2, m3 = st.columns(3)
                 m1.metric("إجمالي المستحقات", format_egp(total_due))
                 m2.metric("إجمالي المدفوعات/الخصم", format_egp(abs(total_paid)))
-                
-                # Icon Logic for Balance
-                bal_icon = "⬇️🔴" if net_bal > 0 else "⬆️🟢" # Red down = We owe, Green up = Paid/Advance
+                bal_icon = "⬇️🔴" if net_bal > 0 else "⬆️🟢" 
                 m3.metric("الرصيد الصافي", f"{bal_icon} {format_egp(abs(net_bal))}")
                 
                 st.divider()
                 st.markdown("##### التفاصيل")
-                
-                # Format Table
                 display = final_data[['Date', 'Search_Label', 'Icon', 'Type', 'Amount']].copy()
                 display.columns = ['التاريخ', 'المركبة/المالك', ' ', 'البيان', 'القيمة']
                 display['القيمة'] = display['القيمة'].apply(format_egp)
                 display['التاريخ'] = display['التاريخ'].dt.strftime('%Y-%m-%d')
-                
                 st.dataframe(display, use_container_width=True)
                 
             else:
@@ -928,7 +945,41 @@ def show_financial_hq(dfs):
         else:
             st.info("لا توجد بيانات مالية.")
 
-# --- 9. MODULE 5: RISK RADAR (CAR CODE + PLATE + ACTIVE CHECK FIX) ---
+    with tab4:
+        st.subheader("📋 التفاصيل والمراجعة (عن الفترة المحددة)")
+        
+        # 1. Contracting Audit
+        audit_data = []
+        for cid, data in contracting_audit.items():
+            diff = data['Paid'] - data['Due'] # Positive means Overpaid, Negative means Pending
+            status = "متوازن"
+            if diff > 100: status = "مدفوع بالزيادة"
+            elif diff < -100: status = "معلق (عجز)"
+            
+            audit_data.append({
+                "السيارة": cid_to_meta.get(cid, {}).get('Car', cid),
+                "المستحق (فترة)": format_egp(data['Due']),
+                "المدفوع (فترة)": format_egp(data['Paid']),
+                "الفارق": format_egp(diff),
+                "الحالة": status
+            })
+        
+        if audit_data:
+            st.markdown("##### مراجعة التعاقدات")
+            st.dataframe(pd.DataFrame(audit_data), use_container_width=True)
+        else:
+            st.info("لا توجد تعاقدات في هذه الفترة.")
+            
+        st.divider()
+        
+        # 2. Deposits
+        st.markdown("##### التأمين (Deposits)")
+        d1, d2, d3 = st.columns(3)
+        d1.metric("تأمين محصل", "غير متوفر") # Needs specific column logic if not standard expense
+        d2.metric("تأمين مسترد", format_egp(deposits_refunded))
+        d3.metric("صافي المحتجز", "---")
+
+# --- 9. MODULE 5: RISK RADAR ---
 def show_risk_radar(dfs):
     st.title("⚠️ رادار المخاطر")
     if not dfs: return
@@ -953,7 +1004,6 @@ def show_risk_radar(dfs):
 
     for _, row in df_cars.iterrows():
         try:
-            # Fix: Case Insensitive Check
             status_val = str(row[col_status]).lower()
             if not any(x in status_val for x in ['valid', 'active', 'ساري']): continue
             
@@ -983,9 +1033,7 @@ def show_risk_radar(dfs):
                     if days <= 90: bucket = "خطر مرتفع (0-3 أشهر)"
                     elif days <= 180: bucket = "خطر متوسط (3-6 أشهر)"
                     elif days > 180: bucket = "خطر منخفض (> 6 أشهر)"
-                    
-                    if bucket:
-                        risks['License'].append({'السيارة': cname, 'اللوحة': plate, 'السبب': reason, 'الاستحقاق': target.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
+                    if bucket: risks['License'].append({'السيارة': cname, 'اللوحة': plate, 'السبب': reason, 'الاستحقاق': target.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
 
             # INSURANCE
             has_ins = False
