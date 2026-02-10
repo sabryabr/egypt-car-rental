@@ -11,9 +11,17 @@ import re
 import time
 from datetime import datetime, timedelta
 import calendar
+import pytz # NEW: Timezone handling
 
 # --- 1. إعداد التطبيق (CONFIG) ---
 st.set_page_config(page_title="نظام إدارة التأجير 3.0", layout="wide", page_icon="🚘", initial_sidebar_state="auto")
+
+# --- TIMEZONE CONFIGURATION ---
+EGYPT_TZ = pytz.timezone('Africa/Cairo')
+
+def get_now():
+    """Returns the current time in Egypt, stripped of tz info for pandas compatibility"""
+    return datetime.now(EGYPT_TZ).replace(tzinfo=None)
 
 # --- 2. تنسيق الواجهة (CSS) ---
 st.markdown("""
@@ -195,7 +203,7 @@ def show_operations(dfs):
         sel_year = c2.selectbox("السنة", [2024, 2025, 2026, 2027], index=2)
         c3, c4 = st.columns(2)
         if period_type == "شهر":
-            sel_spec = c3.selectbox("الشهر", range(1, 13), index=datetime.now().month-1)
+            sel_spec = c3.selectbox("الشهر", range(1, 13), index=get_now().month-1)
         elif period_type == "ربع سنوي":
             sel_spec = c3.selectbox("الربع", [1, 2, 3, 4], index=0)
         else: sel_spec = 0 
@@ -203,7 +211,7 @@ def show_operations(dfs):
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
-    today = datetime.now()
+    today = get_now() # UPDATED
     active_rentals = 0
     car_status_map = {} 
     
@@ -366,7 +374,7 @@ def show_vehicle_360(dfs):
         period_type = tf1.selectbox("عرض", ["شهر", "ربع سنوي", "سنة"], key='v360_p')
         sel_year = tf2.selectbox("السنة", [2024, 2025, 2026], index=2, key='v360_y')
         tf3, tf4 = st.columns(2)
-        if period_type == "شهر": sel_spec = tf3.selectbox("الشهر", range(1, 13), index=datetime.now().month-1, key='v360_m')
+        if period_type == "شهر": sel_spec = tf3.selectbox("الشهر", range(1, 13), index=get_now().month-1, key='v360_m')
         elif period_type == "ربع سنوي": sel_spec = tf3.selectbox("الربع", [1, 2, 3, 4], index=0, key='v360_q')
         else: sel_spec = 0
         show_active = tf4.checkbox("إخفاء الفارغ", value=False)
@@ -576,8 +584,8 @@ def show_crm(dfs):
                 days = 0
                 if pd.notnull(s) and pd.notnull(e):
                     days = (e - s).days
-                    if s <= datetime.now() <= e: status = "نشط"
-                    elif s > datetime.now(): status = "قادم"
+                    if s <= get_now() <= e: status = "نشط"
+                    elif s > get_now(): status = "قادم"
                 
                 daily_rate = (amt / days) if days > 0 else 0
                 rec['Spend'] += amt
@@ -653,7 +661,7 @@ def show_financial_hq(dfs):
         calc_method = f3.selectbox("طريقة الحساب", ["عن الفترة المحددة", "تراكمي حتى الآن"])
         
         f4, f5 = st.columns(2)
-        if period_type == "شهر": sel_spec = f4.selectbox("الشهر", range(1, 13), index=0, key='fin_m')
+        if period_type == "شهر": sel_spec = f4.selectbox("الشهر", range(1, 13), index=get_now().month-1, key='fin_m')
         elif period_type == "ربع سنوي": sel_spec = f4.selectbox("الربع", [1, 2, 3, 4], index=0, key='fin_q')
         else: sel_spec = 0
 
@@ -685,9 +693,6 @@ def show_financial_hq(dfs):
                 if valid:
                     amt = clean_currency(row[col_coll_amt])
                     cash_in += amt
-                    
-                    # Logic to identify deposits? Assuming 'Expense Statement' (Col I) might hold clues
-                    # For now, put all in 'Rental' unless specified
                     cat = "تأجير"
                     inflow_cats[cat] = inflow_cats.get(cat, 0) + amt
             except: continue
@@ -796,7 +801,7 @@ def show_financial_hq(dfs):
             if not owner_name: owner_name = f"Owner {cid}"
             
             cname = f"{car[get_col_by_letter(df_cars, 'B')]} {car[get_col_by_letter(df_cars, 'E')]}"
-            plate = "".join([str(car[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(car[get_col_by_letter(df_cars, p)])])
+            plate = "".join([str(car[get_col_by_letter(df_cars, p)]) + " " for p in plate_cols if pd.notnull(car[get_col_by_letter(df_cars, p)])]).strip()
             yr = str(car[col_model_yr])
             
             search_key = f"[{cid}] {owner_name} - {cname} ({yr}) | {plate.strip()}"
@@ -903,7 +908,7 @@ def show_financial_hq(dfs):
                 mask = (df_all['Date'] >= start_date) & (df_all['Date'] <= end_date)
                 df_filtered = df_all[mask].copy()
             else: 
-                df_filtered = df_all[df_all['Date'] <= datetime.now()].copy()
+                df_filtered = df_all[df_all['Date'] <= get_now()].copy() # UPDATED TO NOW()
 
             col_sel1, col_sel2 = st.columns([1, 3])
             with col_sel1:
@@ -985,7 +990,7 @@ def show_risk_radar(dfs):
     if not dfs: return
     
     df_cars = dfs['cars']
-    today = datetime.now()
+    today = get_now() # UPDATED
     
     risks = {'License': [], 'Insurance': [], 'Contract': []}
     
