@@ -178,8 +178,9 @@ def show_control_tower(dfs):
     checkouts_today = 0
     car_status_map = {} 
     
-    col_start = get_col_by_letter(df_orders, 'F') 
-    col_end = get_col_by_letter(df_orders, 'G')   
+    # ⚠️ FIXED COLUMNS FOR START/END DATE
+    col_start = get_col_by_letter(df_orders, 'L') 
+    col_end = get_col_by_letter(df_orders, 'T')   
     col_car_ord = get_col_by_letter(df_orders, 'D') 
     
     if col_start and col_car_ord:
@@ -190,8 +191,8 @@ def show_control_tower(dfs):
                 e = parse_ar_date(row[col_end])
                 if pd.notnull(s) and pd.notnull(e):
                     if s <= today <= e: car_status_map[cid] = "🔴" 
-                    if s.date() == today.date(): checkouts_today += 1 # Car leaves
-                    if e.date() == today.date(): checkins_today += 1  # Car returns
+                    if s.date() == today.date(): checkouts_today += 1 
+                    if e.date() == today.date(): checkins_today += 1  
             except: continue
 
     car_map = {} 
@@ -274,17 +275,17 @@ def show_order_book(dfs):
 
     st.markdown("سجل مركزي لجميع الحجوزات والعمليات مع تتبع الحالات المالية.")
     
-    # Extract Columns
+    # Extract Columns (Fixed Map)
     c_id = get_col_by_letter(df_orders, 'A')
     c_client = get_col_by_letter(df_orders, 'C')
     c_car = get_col_by_letter(df_orders, 'E')
-    c_start = get_col_by_letter(df_orders, 'F')
-    c_end = get_col_by_letter(df_orders, 'G')
-    c_total = get_col_by_letter(df_orders, 'AF')
-    c_dep_held = get_col_by_letter(df_orders, 'AH')
-    c_egp = get_col_by_letter(df_orders, 'AI')
-    c_usd = get_col_by_letter(df_orders, 'AJ')
-    c_eur = get_col_by_letter(df_orders, 'AK')
+    c_start = get_col_by_letter(df_orders, 'L')
+    c_end = get_col_by_letter(df_orders, 'T')
+    c_total = get_col_by_letter(df_orders, 'AU')
+    c_dep_held = get_col_by_letter(df_orders, 'AW')
+    c_egp = get_col_by_letter(df_orders, 'AX')
+    c_usd = get_col_by_letter(df_orders, 'AY')
+    c_eur = get_col_by_letter(df_orders, 'AZ')
 
     orders_list = []
     if c_id and c_start:
@@ -311,7 +312,6 @@ def show_order_book(dfs):
 
     df_display = pd.DataFrame(orders_list)
     if not df_display.empty:
-        # Search & Filter
         col1, col2 = st.columns([2, 1])
         search_q = col1.text_input("🔍 بحث برقم الطلب، العميل، أو السيارة")
         stat_filter = col2.selectbox("فلتر الحالة", ["الكل", "🟢 نشط", "🟡 قادم", "⚪ مكتمل"])
@@ -321,7 +321,6 @@ def show_order_book(dfs):
         if stat_filter != "الكل": 
             df_display = df_display[df_display["الحالة"] == stat_filter]
 
-        # Formatting
         df_display["الإجمالي (EGP)"] = df_display["الإجمالي (EGP)"].apply(format_egp)
         df_display["المدفوع (EGP)"] = df_display["المدفوع (EGP)"].apply(format_egp)
         df_display["المدفوع (USD)"] = df_display["المدفوع (USD)"].apply(format_usd)
@@ -373,8 +372,8 @@ def show_vehicle_360(dfs):
     trips_data, maint_list, exp_list = [], [], []
     total_revenue, total_maint, total_exp = 0.0, 0.0, 0.0
     
-    col_ord_start, col_ord_end, col_ord_cost, col_ord_car, col_ord_id = get_col_by_letter(df_orders, 'F'), get_col_by_letter(df_orders, 'G'), get_col_by_letter(df_orders, 'AF'), get_col_by_letter(df_orders, 'D'), get_col_by_letter(df_orders, 'A')
-    col_ord_dur_txt = get_col_by_letter(df_orders, 'V')
+    col_ord_start, col_ord_end, col_ord_cost, col_ord_car, col_ord_id = get_col_by_letter(df_orders, 'L'), get_col_by_letter(df_orders, 'T'), get_col_by_letter(df_orders, 'AU'), get_col_by_letter(df_orders, 'D'), get_col_by_letter(df_orders, 'A')
+    col_ord_loc_start, col_ord_loc_end, col_ord_dur_txt = get_col_by_letter(df_orders, 'M'), get_col_by_letter(df_orders, 'U'), get_col_by_letter(df_orders, 'V')
 
     if col_ord_start:
         for _, row in df_orders.iterrows():
@@ -449,9 +448,9 @@ def show_crm(dfs):
                 client_db[full_name] = {'Display': f"[{cid}] {full_name}", 'Name': full_name, 'Spend': 0, 'Trips': 0, 'History': [], 'DepositHeld': 0, 'PaidUSD': 0, 'PaidEUR': 0}
             except: continue
 
-    col_ord_name, col_ord_cost, col_ord_s, col_ord_e = get_col_by_letter(df_orders, 'B'), get_col_by_letter(df_orders, 'AF'), get_col_by_letter(df_orders, 'F'), get_col_by_letter(df_orders, 'G')
-    col_ord_dep_held, col_ord_usd, col_ord_eur = get_col_by_letter(df_orders, 'AO'), get_col_by_letter(df_orders, 'AQ'), get_col_by_letter(df_orders, 'AR')
-    col_ord_car_name = get_col_by_letter(df_orders, 'E')
+    col_ord_name, col_ord_cost, col_ord_s, col_ord_e = get_col_by_letter(df_orders, 'B'), get_col_by_letter(df_orders, 'AU'), get_col_by_letter(df_orders, 'L'), get_col_by_letter(df_orders, 'T')
+    col_ord_dep_held, col_ord_usd, col_ord_eur = get_col_by_letter(df_orders, 'AW'), get_col_by_letter(df_orders, 'AY'), get_col_by_letter(df_orders, 'AZ')
+    col_ord_car_name, col_ord_id = get_col_by_letter(df_orders, 'E'), get_col_by_letter(df_orders, 'A')
 
     if col_ord_name:
         for _, row in df_orders.iterrows():
@@ -473,6 +472,7 @@ def show_crm(dfs):
                 rec['DepositHeld'] += dep
                 rec['Trips'] += 1
                 rec['History'].append({
+                    "رقم الطلب": str(row[col_ord_id]),
                     "السيارة": str(row[col_ord_car_name]),
                     "البدء": s.strftime("%Y-%m-%d") if pd.notnull(s) else "-", 
                     "التكلفة": format_egp(amt), "الحالة": stat, "وديعة معلقة": format_egp(dep)
@@ -500,7 +500,6 @@ def show_crm(dfs):
                 client_data = client_db[df_crm.iloc[selection.selection.rows[0]]['Key']]
                 st.info(f"**{client_data['Display']}**")
                 
-                # Dynamic Tiering Badge
                 tier = "🌟 VIP" if client_data['Spend'] > 50000 else "👤 Regular"
                 st.markdown(f"**تصنيف العميل:** {tier}")
 
@@ -535,19 +534,18 @@ def show_financial_hq(dfs):
     inflow_cats, expense_cats = {}, {}
     cash_in, cash_out = 0.0, 0.0
     
-    # 1. Multi-Currency Vault & Deposits (From Orders)
+    # 1. Orders Data
     total_egp, total_usd, total_eur = 0.0, 0.0, 0.0
     deposits_collected, deposits_refunded, deposits_held = 0.0, 0.0, 0.0
     
-    col_ord_s = get_col_by_letter(df_orders, 'F')
-    col_ord_dep_coll, col_ord_dep_ref, col_ord_dep_held = get_col_by_letter(df_orders, 'AB'), get_col_by_letter(df_orders, 'AN'), get_col_by_letter(df_orders, 'AO')
-    col_ord_egp, col_ord_usd, col_ord_eur = get_col_by_letter(df_orders, 'AP'), get_col_by_letter(df_orders, 'AQ'), get_col_by_letter(df_orders, 'AR')
+    col_ord_s = get_col_by_letter(df_orders, 'L')
+    col_ord_dep_coll, col_ord_dep_ref, col_ord_dep_held = get_col_by_letter(df_orders, 'AB'), get_col_by_letter(df_orders, 'AV'), get_col_by_letter(df_orders, 'AW')
+    col_ord_egp, col_ord_usd, col_ord_eur = get_col_by_letter(df_orders, 'AX'), get_col_by_letter(df_orders, 'AY'), get_col_by_letter(df_orders, 'AZ')
     
     if col_ord_s:
         for _, row in df_orders.iterrows():
             try:
                 s = parse_ar_date(row[col_ord_s])
-                # Vault accumulates EVERYTHING that happens in this period
                 if pd.notnull(s) and start_date <= s <= end_date:
                     deposits_collected += clean_currency(row[col_ord_dep_coll])
                     deposits_refunded += clean_currency(row[col_ord_dep_ref])
@@ -558,7 +556,7 @@ def show_financial_hq(dfs):
                     total_eur += clean_currency(row[col_ord_eur])
             except: continue
 
-    # 2. Collections (Legacy Income)
+    # 2. Collections
     col_coll_amt, col_coll_y, col_coll_m = get_col_by_letter(df_coll, 'R'), get_col_by_letter(df_coll, 'Q'), get_col_by_letter(df_coll, 'P')
     if col_coll_amt:
         for _, row in df_coll.iterrows():
@@ -567,7 +565,7 @@ def show_financial_hq(dfs):
                 if (period_type=="سنة" and y==sel_year) or (period_type=="شهر" and y==sel_year and m==sel_spec) or (period_type=="ربع سنوي" and y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]):
                     amt = clean_currency(row[col_coll_amt])
                     cash_in += amt
-                    inflow_cats["تأجير عام"] = inflow_cats.get("تأجير عام", 0) + amt
+                    inflow_cats["إيرادات سابقة"] = inflow_cats.get("إيرادات سابقة", 0) + amt
             except: continue
 
     # 3. Expenses
@@ -599,7 +597,6 @@ def show_financial_hq(dfs):
                     cat_name = "صيانة / مخالفات" if type_id in ['3','4'] else ("دفعات تعاقد" if type_id == '1' else ("عمولات" if type_id == '8' else "مصروفات سيارة"))
                     expense_cats[cat_name] = expense_cats.get(cat_name, 0) + amt
 
-                # Ledger log
                 txn_date = datetime(y, m, 28)
                 if type_id == '1': 
                     ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'دفع تعاقد', 'Amount': -amt, 'Sort': 2, 'Icon': '⬇️🔴'})
@@ -645,12 +642,11 @@ def show_financial_hq(dfs):
                 curr_date += timedelta(days=freq_days)
         except: continue
 
-    # TABS
     tab1, tab2, tab3, tab4 = st.tabs(["📊 P&L والخزينة", "💱 سلة العملات والودائع", "🤝 تسويات الملاك", "📋 تفاصيل التدقيق"])
     
     with tab1:
         st.markdown("##### الأرباح والخسائر للعمليات (Cash Flow)")
-        rev = cash_in + total_egp # Assuming Collections + EGP Orders
+        rev = cash_in + total_egp 
         items = [('الإيرادات', rev)]
         for k, v in expense_cats.items(): items.append((k, -v))
         df_waterfall = pd.DataFrame(items, columns=['Category', 'Amount'])
@@ -688,7 +684,7 @@ def show_financial_hq(dfs):
         if not df_all.empty:
             df_all['Search_Label'] = df_all['CID'].map(lambda x: cid_to_meta.get(x, {}).get('Label', 'Unknown'))
             if calc_method == "عن الفترة المحددة فقط": df_filtered = df_all[(df_all['Date'] >= start_date) & (df_all['Date'] <= end_date)].copy()
-            else: df_filtered = df_all[df_all['Date'] <= end_date].copy() # Cumulative up to end of selected period
+            else: df_filtered = df_all[df_all['Date'] <= end_date].copy() 
 
             col_sel1, col_sel2 = st.columns([1, 3])
             with col_sel1: select_all = st.checkbox("تحديد الكل", value=True)
