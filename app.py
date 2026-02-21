@@ -11,17 +11,9 @@ import re
 import time
 from datetime import datetime, timedelta
 import calendar
-import pytz # NEW: Timezone handling
 
 # --- 1. إعداد التطبيق (CONFIG) ---
 st.set_page_config(page_title="نظام إدارة التأجير 3.0", layout="wide", page_icon="🚘", initial_sidebar_state="auto")
-
-# --- TIMEZONE CONFIGURATION ---
-EGYPT_TZ = pytz.timezone('Africa/Cairo')
-
-def get_now():
-    """Returns the current time in Egypt, stripped of tz info for pandas compatibility"""
-    return datetime.now(EGYPT_TZ).replace(tzinfo=None)
 
 # --- 2. تنسيق الواجهة (CSS) ---
 st.markdown("""
@@ -62,7 +54,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. محرك البيانات (DATA ENGINE - ROBUST) ---
+# --- 3. محرك البيانات (DATA ENGINE) ---
 @st.cache_data(ttl=300)
 def load_data_v3():
     if "gcp_service_account" not in st.secrets:
@@ -75,47 +67,36 @@ def load_data_v3():
     service = build('sheets', 'v4', credentials=creds)
 
     def fetch_sheet(sheet_id, range_name, header_row=0):
-        # Retry logic for 503 Errors
-        for attempt in range(3):
-            try:
-                result = service.spreadsheets().values().get(spreadsheetId=sheet_id, range=range_name).execute()
-                vals = result.get('values', [])
-                if not vals: return pd.DataFrame()
-                if len(vals) > header_row:
-                    headers = vals[header_row]
-                    data = vals[header_row+1:]
-                    clean_headers = []
-                    seen = {}
-                    for i, h in enumerate(headers):
-                        h_str = str(h).strip()
-                        if not h_str: h_str = f"Col_{i}"
-                        if h_str in seen:
-                            seen[h_str] += 1
-                            clean_headers.append(f"{h_str}_{seen[h_str]}")
-                        else:
-                            seen[h_str] = 0
-                            clean_headers.append(h_str)
-                    target_len = len(clean_headers)
-                    clean_data = []
-                    for row in data:
-                        row_fixed = row[:target_len] 
-                        if len(row_fixed) < target_len:
-                            row_fixed += [None] * (target_len - len(row_fixed))
-                        clean_data.append(row_fixed)
-                    return pd.DataFrame(clean_data, columns=clean_headers)
-                return pd.DataFrame()
-            
-            except HttpError as e:
-                if e.resp.status in [429, 500, 503]:
-                    time.sleep(2 ** attempt) 
-                    continue
-                else:
-                    st.warning(f"⚠️ خطأ في التحميل ({range_name}): {str(e)}")
-                    return pd.DataFrame()
-            except Exception as e:
-                st.warning(f"⚠️ خطأ غير متوقع ({range_name}): {str(e)}")
-                return pd.DataFrame()
-        return pd.DataFrame()
+        try:
+            result = service.spreadsheets().values().get(spreadsheetId=sheet_id, range=range_name).execute()
+            vals = result.get('values', [])
+            if not vals: return pd.DataFrame()
+            if len(vals) > header_row:
+                headers = vals[header_row]
+                data = vals[header_row+1:]
+                clean_headers = []
+                seen = {}
+                for i, h in enumerate(headers):
+                    h_str = str(h).strip()
+                    if not h_str: h_str = f"Col_{i}"
+                    if h_str in seen:
+                        seen[h_str] += 1
+                        clean_headers.append(f"{h_str}_{seen[h_str]}")
+                    else:
+                        seen[h_str] = 0
+                        clean_headers.append(h_str)
+                target_len = len(clean_headers)
+                clean_data = []
+                for row in data:
+                    row_fixed = row[:target_len] 
+                    if len(row_fixed) < target_len:
+                        row_fixed += [None] * (target_len - len(row_fixed))
+                    clean_data.append(row_fixed)
+                return pd.DataFrame(clean_data, columns=clean_headers)
+            return pd.DataFrame()
+        except Exception as e:
+            st.warning(f"⚠️ خطأ في التحميل ({range_name}): {str(e)}")
+            return pd.DataFrame()
 
     IDS = {
         'cars': "1tQVkPj7tCnrKsHEIs04a1WzzC04jpOWuLsXgXOkVMkk",
@@ -203,7 +184,7 @@ def show_operations(dfs):
         sel_year = c2.selectbox("السنة", [2024, 2025, 2026, 2027], index=2)
         c3, c4 = st.columns(2)
         if period_type == "شهر":
-            sel_spec = c3.selectbox("الشهر", range(1, 13), index=get_now().month-1)
+            sel_spec = c3.selectbox("الشهر", range(1, 13), index=datetime.now().month-1)
         elif period_type == "ربع سنوي":
             sel_spec = c3.selectbox("الربع", [1, 2, 3, 4], index=0)
         else: sel_spec = 0 
@@ -211,7 +192,7 @@ def show_operations(dfs):
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
-    today = get_now() # UPDATED
+    today = datetime.now()
     active_rentals = 0
     car_status_map = {} 
     
@@ -238,7 +219,7 @@ def show_operations(dfs):
     col_status = get_col_by_letter(df_cars, 'AZ')
     col_brand = get_col_by_letter(df_cars, 'B')
     col_model = get_col_by_letter(df_cars, 'E')
-    plate_cols = ['AC','AB','AA','Z','Y','X','W']
+    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC'] # FIXED ORDER
 
     if col_code and col_status:
         valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
@@ -351,7 +332,7 @@ def show_vehicle_360(dfs):
             car_options = {}
             col_code = get_col_by_letter(df_cars, 'A')
             col_status = get_col_by_letter(df_cars, 'AZ')
-            plate_cols = ['AC','AB','AA','Z','Y','X','W']
+            plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC'] # FIXED ORDER
             if col_code and col_status:
                 valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
                 if fleet_cat == "النشطة": subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
@@ -374,7 +355,7 @@ def show_vehicle_360(dfs):
         period_type = tf1.selectbox("عرض", ["شهر", "ربع سنوي", "سنة"], key='v360_p')
         sel_year = tf2.selectbox("السنة", [2024, 2025, 2026], index=2, key='v360_y')
         tf3, tf4 = st.columns(2)
-        if period_type == "شهر": sel_spec = tf3.selectbox("الشهر", range(1, 13), index=get_now().month-1, key='v360_m')
+        if period_type == "شهر": sel_spec = tf3.selectbox("الشهر", range(1, 13), index=datetime.now().month-1, key='v360_m')
         elif period_type == "ربع سنوي": sel_spec = tf3.selectbox("الربع", [1, 2, 3, 4], index=0, key='v360_q')
         else: sel_spec = 0
         show_active = tf4.checkbox("إخفاء الفارغ", value=False)
@@ -530,7 +511,7 @@ def show_crm(dfs):
     # 1. Car Map
     car_display_map = {}
     col_code = get_col_by_letter(df_cars, 'A')
-    plate_cols = ['AC','AB','AA','Z','Y','X','W']
+    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC'] # FIXED ORDER
     if col_code:
         for _, row in df_cars.iterrows():
             try:
@@ -584,8 +565,8 @@ def show_crm(dfs):
                 days = 0
                 if pd.notnull(s) and pd.notnull(e):
                     days = (e - s).days
-                    if s <= get_now() <= e: status = "نشط"
-                    elif s > get_now(): status = "قادم"
+                    if s <= datetime.now() <= e: status = "نشط"
+                    elif s > datetime.now(): status = "قادم"
                 
                 daily_rate = (amt / days) if days > 0 else 0
                 rec['Spend'] += amt
@@ -661,7 +642,7 @@ def show_financial_hq(dfs):
         calc_method = f3.selectbox("طريقة الحساب", ["عن الفترة المحددة", "تراكمي حتى الآن"])
         
         f4, f5 = st.columns(2)
-        if period_type == "شهر": sel_spec = f4.selectbox("الشهر", range(1, 13), index=get_now().month-1, key='fin_m')
+        if period_type == "شهر": sel_spec = f4.selectbox("الشهر", range(1, 13), index=0, key='fin_m')
         elif period_type == "ربع سنوي": sel_spec = f4.selectbox("الربع", [1, 2, 3, 4], index=0, key='fin_q')
         else: sel_spec = 0
 
@@ -693,6 +674,7 @@ def show_financial_hq(dfs):
                 if valid:
                     amt = clean_currency(row[col_coll_amt])
                     cash_in += amt
+                    
                     cat = "تأجير"
                     inflow_cats[cat] = inflow_cats.get(cat, 0) + amt
             except: continue
@@ -784,11 +766,10 @@ def show_financial_hq(dfs):
     col_model_yr = get_col_by_letter(df_cars, 'H')
     col_car_name = get_col_by_letter(df_cars, 'B')
     col_status = get_col_by_letter(df_cars, 'AZ')
-    plate_cols = ['AC','AB','AA','Z','Y','X','W']
+    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC'] # FIXED ORDER
     
     cid_to_meta = {} 
 
-    # FIX: Generate Accruals into FUTURE (Until end of selected year + margin)
     future_limit = datetime(sel_year, 12, 31) 
 
     for _, car in df_cars.iterrows():
@@ -908,7 +889,7 @@ def show_financial_hq(dfs):
                 mask = (df_all['Date'] >= start_date) & (df_all['Date'] <= end_date)
                 df_filtered = df_all[mask].copy()
             else: 
-                df_filtered = df_all[df_all['Date'] <= get_now()].copy() # UPDATED TO NOW()
+                df_filtered = df_all[df_all['Date'] <= datetime.now()].copy()
 
             col_sel1, col_sel2 = st.columns([1, 3])
             with col_sel1:
@@ -980,17 +961,17 @@ def show_financial_hq(dfs):
         # 2. Deposits
         st.markdown("##### التأمين (Deposits)")
         d1, d2, d3 = st.columns(3)
-        d1.metric("تأمين محصل", "غير متوفر") # Needs specific column logic if not standard expense
+        d1.metric("تأمين محصل", "غير متوفر") 
         d2.metric("تأمين مسترد", format_egp(deposits_refunded))
         d3.metric("صافي المحتجز", "---")
 
-# --- 9. MODULE 5: RISK RADAR ---
+# --- 9. MODULE 5: RISK RADAR (FIXED ARRAY) ---
 def show_risk_radar(dfs):
     st.title("⚠️ رادار المخاطر")
     if not dfs: return
     
     df_cars = dfs['cars']
-    today = get_now() # UPDATED
+    today = datetime.now()
     
     risks = {'License': [], 'Insurance': [], 'Contract': []}
     
@@ -1003,9 +984,8 @@ def show_risk_radar(dfs):
     col_name = get_col_by_letter(df_cars, 'B')
     col_model = get_col_by_letter(df_cars, 'E')
     col_code = get_col_by_letter(df_cars, 'A') 
-    col_plate = get_col_by_letter(df_cars, 'AC') 
     col_status = get_col_by_letter(df_cars, 'AZ')
-    plate_cols = ['AC','AB','AA','Z','Y','X','W']
+    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC'] # FIXED ORDER
 
     for _, row in df_cars.iterrows():
         try:
