@@ -79,7 +79,6 @@ def load_data_v3():
                     raw_headers = vals[header_row]
                     data = vals[header_row+1:]
                     
-                    # CRITICAL FIX: Force headers to at least 60 columns to prevent missing plates
                     max_cols = max(len(raw_headers), 60)
                     for r in data:
                         if len(r) > max_cols: max_cols = len(r)
@@ -188,7 +187,6 @@ def get_date_filter_range(period_type, year, specifier):
         return datetime(year, specifier, 1), datetime(year, specifier, last_day, 23, 59, 59)
 
 def build_car_dict(df_cars):
-    """Centralized logic to perfectly format car names and plates without Yes/Active bugs."""
     car_dict = {}
     col_code = get_col_by_letter(df_cars, 'A')
     col_status = get_col_by_letter(df_cars, 'AZ')
@@ -208,15 +206,12 @@ def build_car_dict(df_cars):
         status_val = str(val(row, col_status)).lower()
         is_active = any(x in status_val for x in ['valid', 'active', 'ساري'])
         
-        # 1. Clean Brand (removes "Yes" if it leaked into this column)
         brand_val = str(val(row, col_brand)).strip()
         if brand_val.lower() in ['yes', 'no', 'نعم', 'لا', 'true', 'false', 'nan', 'valid', 'active']: brand_val = ""
         
-        # 2. Clean Model
         model_val = str(val(row, col_model)).strip()
         if model_val.lower() == 'nan': model_val = ""
         
-        # 3. Clean Year
         yr_val = val(row, col_year)
         yr_str = str(yr_val).split('.')[0] if pd.notnull(yr_val) else ""
         yr_formatted = f" ({yr_str})" if yr_str and yr_str.lower() != 'nan' else ""
@@ -224,11 +219,9 @@ def build_car_dict(df_cars):
         c_name = f"{brand_val} {model_val}".strip() + yr_formatted
         if c_name.strip() == "": c_name = f"سيارة {c_id}"
         
-        # 4. Clean Plate
         plate_parts = [str(val(row, p)).strip().replace('.0', '') for p in plate_cols if p and pd.notnull(val(row, p)) and str(val(row, p)).strip() not in ['nan', '']]
         plate = " ".join(plate_parts)
         
-        # 5. Format string with RLM markers for perfect Arabic RTL rendering
         if plate:
             full_label = f"\u200F{c_name} | {plate}\u200F"
         else:
@@ -268,39 +261,56 @@ def show_control_tower(dfs):
                     if e.date() == today.date(): checkins_today += 1  
             except: continue
 
-    car_dict = build_car_dict(df_cars)
-    global_active_fleet = sum(1 for c in car_dict.values() if c['is_active'])
-    global_active_rentals = len(car_status_map)
+    car_map = {} 
+    
+    col_code, col_status, col_brand, col_model = get_col_by_letter(df_cars, 'A'), get_col_by_letter(df_cars, 'AZ'), get_col_by_letter(df_cars, 'B'), get_col_by_letter(df_cars, 'E')
+    col_model_yr = get_col_by_letter(df_cars, 'H')
+    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC']
 
-    st.markdown("### 📡 نبذة عن اليوم")
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("إيجارات حية الآن", global_active_rentals, f"من أصل {global_active_fleet} سيارة نشطة", delta_color="off")
-    k2.metric("متاح للإيجار", max(0, global_active_fleet - global_active_rentals), "جاهز للتسليم", delta_color="normal")
-    k3.metric("تسليمات اليوم (خروج)", checkouts_today, "سيارات تبدأ إيجارها اليوم", delta_color="off")
-    k4.metric("استلامات اليوم (عودة)", checkins_today, "سيارات تعود اليوم", delta_color="off")
+    if col_code and col_status:
+        valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
+        global_active_fleet = len(valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)])
+        global_active_rentals = len(car_status_map)
+        
+        st.markdown("### 📡 نبذة عن اليوم")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("إيجارات حية الآن", global_active_rentals, f"من أصل {global_active_fleet} سيارة نشطة", delta_color="off")
+        k2.metric("متاح للإيجار", max(0, global_active_fleet - global_active_rentals), "جاهز للتسليم", delta_color="normal")
+        k3.metric("تسليمات اليوم (خروج)", checkouts_today, "سيارات تبدأ إيجارها اليوم", delta_color="off")
+        k4.metric("استلامات اليوم (عودة)", checkins_today, "سيارات تعود اليوم", delta_color="off")
 
-    st.divider()
+        st.divider()
 
-    with st.expander("🔎 أدوات عرض الجدول الزمني", expanded=False):
-        c1, c2 = st.columns(2)
-        period_type = c1.selectbox("نوع الفترة", ["شهر", "ربع سنوي", "سنة"])
-        sel_year = c2.selectbox("السنة", [2024, 2025, 2026, 2027], index=2)
-        c3, c4 = st.columns(2)
-        if period_type == "شهر": sel_spec = c3.selectbox("الشهر", range(1, 13), index=today.month-1)
-        elif period_type == "ربع سنوي": sel_spec = c3.selectbox("الربع", [1, 2, 3, 4], index=0)
-        else: sel_spec = 0 
-        fleet_status = c4.selectbox("عرض الأسطول في الجدول", ["السيارات النشطة", "الكل", "السيارات المتوقفة (أرشيف)"], index=0)
+        with st.expander("🔎 أدوات عرض الجدول الزمني", expanded=False):
+            c1, c2 = st.columns(2)
+            period_type = c1.selectbox("نوع الفترة", ["شهر", "ربع سنوي", "سنة"])
+            sel_year = c2.selectbox("السنة", [2024, 2025, 2026, 2027], index=2)
+            c3, c4 = st.columns(2)
+            if period_type == "شهر": sel_spec = c3.selectbox("الشهر", range(1, 13), index=today.month-1)
+            elif period_type == "ربع سنوي": sel_spec = c3.selectbox("الربع", [1, 2, 3, 4], index=0)
+            else: sel_spec = 0 
+            
+            fleet_status = c4.selectbox("عرض الأسطول في الجدول", ["السيارات النشطة", "الكل", "السيارات المتوقفة (أرشيف)"], index=0)
+
+        if fleet_status == "السيارات النشطة": cars_subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
+        elif fleet_status == "السيارات المتوقفة (أرشيف)": cars_subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
+        else: cars_subset = valid_rows
+        
+        for _, row in cars_subset.iterrows(): 
+            try:
+                c_id = clean_id_tag(val(row, col_code))
+                yr_val = val(row, col_model_yr)
+                yr_str = str(yr_val).split('.')[0] if pd.notnull(yr_val) else ""
+                yr_formatted = f" ({yr_str})" if yr_str and yr_str.lower() != 'nan' else ""
+                
+                c_name = f"{val(row, col_brand)} {val(row, col_model)}{yr_formatted}"
+                plate = "".join([str(val(row, p)) + " " for p in plate_cols if pd.notnull(val(row, p))]).strip()
+                indicator = car_status_map.get(c_id, "🟢") 
+                
+                car_map[c_id] = f"{indicator} {c_name} | {plate}"
+            except: continue
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
-
-    # Filter cars for timeline
-    car_map = {}
-    for cid, cdata in car_dict.items():
-        if fleet_status == "السيارات النشطة" and not cdata['is_active']: continue
-        if fleet_status == "السيارات المتوقفة (أرشيف)" and cdata['is_active']: continue
-        indicator = car_status_map.get(cid, "🟢")
-        # Put indicator inside the RLM so it renders beautifully RTL
-        car_map[cid] = f"{indicator} {cdata['label']}"
 
     st.markdown(f"### 🗓️ الجدول الزمني للأسطول ({period_type})")
     timeline_data = []
@@ -340,14 +350,12 @@ def show_control_tower(dfs):
     if not df_timeline.empty:
         color_map = {"نشط": "#ff4b4b", "ينتهي قريباً": "#f39c12", "قادم": "#9b59b6", "مكتمل": "#95a5a6", "متاح": "#2e3440"}
         fig = px.timeline(df_timeline, x_start="البدء", x_end="الانتهاء", y="السيارة", color="الحالة", color_discrete_map=color_map, hover_data=["العميل"])
-        
-        # CRITICAL FIX: dtick=1 forces every single car label to render
         fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=sorted(list(car_map.values())), type='category', dtick=1)
         
         fig.update_layout(
             height=max(400, len(car_map) * 35), 
             plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", 
-            font=dict(color="white", size=12), 
+            font=dict(color="white", size=11), 
             margin=dict(l=10, r=10, t=10, b=10),
             xaxis=dict(range=[start_range, end_range])
         )
@@ -367,7 +375,7 @@ def show_order_book(dfs):
     
     c_id = get_col_by_letter(df_orders, 'A')
     c_client = get_col_by_letter(df_orders, 'C')
-    c_car = get_col_by_letter(df_orders, 'D') # Use code to get beautiful name
+    c_car = get_col_by_letter(df_orders, 'D') 
     c_start = get_col_by_letter(df_orders, 'L')
     c_end = get_col_by_letter(df_orders, 'T')
     c_total = get_col_by_letter(df_orders, 'AU')
@@ -473,11 +481,17 @@ def show_vehicle_360(dfs):
                     stat = get_status_badge(d_s, d_e)
                     
                     days_calc = (d_e - d_s).days if pd.notnull(d_e) else 1
-                    if days_calc == 0: days_calc = 1
+                    if days_calc <= 0: days_calc = 1
                     
                     start_str = d_s.strftime('%Y-%m-%d %I:%M %p')
                     end_str = d_e.strftime('%Y-%m-%d %I:%M %p') if pd.notnull(d_e) else "-"
-                    car_full_name = [k for k, v in car_options.items() if v == cid][0]
+                    
+                    # Safe key access
+                    car_full_name = "Unknown"
+                    for k, v in car_options.items():
+                        if v == cid:
+                            car_full_name = k
+                            break
                     
                     trips_data.append({
                         "السيارة": car_full_name, "رقم الطلب": val(row, col_ord_id), "الحالة": stat,
@@ -504,7 +518,12 @@ def show_vehicle_360(dfs):
                         is_maint = ("صيانات" in type_str or "Maintenance" in type_str)
                         display_name = str(val(row, col_exp_maint_ar)) if is_maint else f"{type_str} - {str(val(row, col_exp_stmt_ar))}"
 
-                        car_full_name = [k for k, v in car_options.items() if v == cid][0]
+                        car_full_name = "Unknown"
+                        for k, v in car_options.items():
+                            if v == cid:
+                                car_full_name = k
+                                break
+                                
                         dt_str = f"{y}-{m:02d}-{d_val:02d}"
                         
                         entry = {"السيارة": car_full_name, "التاريخ": dt_str, "البند": display_name, "التكلفة": format_egp(amt)}
@@ -526,15 +545,33 @@ def show_vehicle_360(dfs):
     roi = total_revenue - total_maint - total_exp
     k4.metric("العائد الصافي (ROI)", format_egp(roi), delta_color="normal" if roi >= 0 else "inverse")
     
+    # FIXED: Replaced ternary operators with proper if/else blocks for Streamlit rendering stability
     t1, t2, t3, t4 = st.tabs(["الرحلات", "الصيانة", "المصروفات", "السجل الشامل (History)"])
-    with t1: st.dataframe(pd.DataFrame(trips_data), use_container_width=True) if trips_data else st.info("فارغ")
-    with t2: st.dataframe(pd.DataFrame(maint_list), use_container_width=True) if maint_list else st.info("فارغ")
-    with t3: st.dataframe(pd.DataFrame(exp_list), use_container_width=True) if exp_list else st.info("فارغ")
+    
+    with t1: 
+        if trips_data:
+            st.dataframe(pd.DataFrame(trips_data), use_container_width=True)
+        else:
+            st.info("فارغ")
+            
+    with t2: 
+        if maint_list:
+            st.dataframe(pd.DataFrame(maint_list), use_container_width=True)
+        else:
+            st.info("فارغ")
+            
+    with t3: 
+        if exp_list:
+            st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
+        else:
+            st.info("فارغ")
+            
     with t4: 
         if all_history:
             df_hist = pd.DataFrame(all_history).sort_values("تاريخ للفرز", ascending=False).drop(columns=["تاريخ للفرز"])
             st.dataframe(df_hist, use_container_width=True)
-        else: st.info("لا يوجد سجل لهذه السيارة في الفترة المحددة.")
+        else: 
+            st.info("لا يوجد سجل لهذه السيارة في الفترة المحددة.")
 
 # --- MODULE 4: CRM ---
 def show_crm(dfs):
