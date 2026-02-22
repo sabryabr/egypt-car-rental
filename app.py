@@ -18,7 +18,6 @@ st.set_page_config(page_title="Egypt Rental ERP 3.0", layout="wide", page_icon="
 
 EGYPT_TZ = pytz.timezone('Africa/Cairo')
 def get_now():
-    """Forces all time calculations to Egypt local time."""
     return datetime.now(EGYPT_TZ).replace(tzinfo=None)
 
 # --- 2. ENTERPRISE UI/CSS ---
@@ -77,8 +76,16 @@ def load_data_v3():
                 vals = result.get('values', [])
                 if not vals: return pd.DataFrame()
                 if len(vals) > header_row:
-                    headers = vals[header_row]
+                    raw_headers = vals[header_row]
                     data = vals[header_row+1:]
+                    
+                    # CRITICAL FIX: Force headers to at least 60 columns to prevent missing plates
+                    max_cols = max(len(raw_headers), 60)
+                    for r in data:
+                        if len(r) > max_cols: max_cols = len(r)
+                    
+                    headers = raw_headers + [""] * (max_cols - len(raw_headers))
+                    
                     clean_headers = []
                     seen = {}
                     for i, h in enumerate(headers):
@@ -90,6 +97,7 @@ def load_data_v3():
                         else:
                             seen[h_str] = 0
                             clean_headers.append(h_str)
+                            
                     target_len = len(clean_headers)
                     clean_data = []
                     for row in data:
@@ -179,6 +187,60 @@ def get_date_filter_range(period_type, year, specifier):
         _, last_day = calendar.monthrange(year, specifier)
         return datetime(year, specifier, 1), datetime(year, specifier, last_day, 23, 59, 59)
 
+def build_car_dict(df_cars):
+    """Centralized logic to perfectly format car names and plates without Yes/Active bugs."""
+    car_dict = {}
+    col_code = get_col_by_letter(df_cars, 'A')
+    col_status = get_col_by_letter(df_cars, 'AZ')
+    col_brand = get_col_by_letter(df_cars, 'B')
+    col_model = get_col_by_letter(df_cars, 'E')
+    col_year = get_col_by_letter(df_cars, 'H')
+    
+    plate_col_letters = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC']
+    plate_cols = [get_col_by_letter(df_cars, p) for p in plate_col_letters]
+    
+    if not col_code: return car_dict
+    
+    for _, row in df_cars.iterrows():
+        c_id = clean_id_tag(val(row, col_code))
+        if not c_id or c_id == 'unknown': continue
+        
+        status_val = str(val(row, col_status)).lower()
+        is_active = any(x in status_val for x in ['valid', 'active', 'ساري'])
+        
+        # 1. Clean Brand (removes "Yes" if it leaked into this column)
+        brand_val = str(val(row, col_brand)).strip()
+        if brand_val.lower() in ['yes', 'no', 'نعم', 'لا', 'true', 'false', 'nan', 'valid', 'active']: brand_val = ""
+        
+        # 2. Clean Model
+        model_val = str(val(row, col_model)).strip()
+        if model_val.lower() == 'nan': model_val = ""
+        
+        # 3. Clean Year
+        yr_val = val(row, col_year)
+        yr_str = str(yr_val).split('.')[0] if pd.notnull(yr_val) else ""
+        yr_formatted = f" ({yr_str})" if yr_str and yr_str.lower() != 'nan' else ""
+        
+        c_name = f"{brand_val} {model_val}".strip() + yr_formatted
+        if c_name.strip() == "": c_name = f"سيارة {c_id}"
+        
+        # 4. Clean Plate
+        plate_parts = [str(val(row, p)).strip().replace('.0', '') for p in plate_cols if p and pd.notnull(val(row, p)) and str(val(row, p)).strip() not in ['nan', '']]
+        plate = " ".join(plate_parts)
+        
+        # 5. Format string with RLM markers for perfect Arabic RTL rendering
+        if plate:
+            full_label = f"\u200F{c_name} | {plate}\u200F"
+        else:
+            full_label = f"\u200F{c_name}\u200F"
+            
+        car_dict[c_id] = {
+            'label': full_label,
+            'is_active': is_active,
+            'raw_row': row
+        }
+    return car_dict
+
 # --- MODULE 1: CONTROL TOWER ---
 def show_control_tower(dfs):
     st.title("🛰️ برج المراقبة (Control Tower)")
@@ -206,59 +268,39 @@ def show_control_tower(dfs):
                     if e.date() == today.date(): checkins_today += 1  
             except: continue
 
-    car_map = {} 
-    
-    col_code, col_status, col_brand, col_model = get_col_by_letter(df_cars, 'A'), get_col_by_letter(df_cars, 'AZ'), get_col_by_letter(df_cars, 'B'), get_col_by_letter(df_cars, 'E')
-    col_model_yr = get_col_by_letter(df_cars, 'H')
-    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC']
+    car_dict = build_car_dict(df_cars)
+    global_active_fleet = sum(1 for c in car_dict.values() if c['is_active'])
+    global_active_rentals = len(car_status_map)
 
-    if col_code and col_status:
-        # Calculate Global Metrics FIRST regardless of selection
-        valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
-        global_active_fleet = len(valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)])
-        global_active_rentals = len(car_status_map)
-        
-        # High-Level Metrics
-        st.markdown("### 📡 نبذة عن اليوم")
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("إيجارات حية الآن", global_active_rentals, f"من أصل {global_active_fleet} سيارة نشطة", delta_color="off")
-        k2.metric("متاح للإيجار", max(0, global_active_fleet - global_active_rentals), "جاهز للتسليم", delta_color="normal")
-        k3.metric("تسليمات اليوم (خروج)", checkouts_today, "سيارات تبدأ إيجارها اليوم", delta_color="off")
-        k4.metric("استلامات اليوم (عودة)", checkins_today, "سيارات تعود اليوم", delta_color="off")
+    st.markdown("### 📡 نبذة عن اليوم")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("إيجارات حية الآن", global_active_rentals, f"من أصل {global_active_fleet} سيارة نشطة", delta_color="off")
+    k2.metric("متاح للإيجار", max(0, global_active_fleet - global_active_rentals), "جاهز للتسليم", delta_color="normal")
+    k3.metric("تسليمات اليوم (خروج)", checkouts_today, "سيارات تبدأ إيجارها اليوم", delta_color="off")
+    k4.metric("استلامات اليوم (عودة)", checkins_today, "سيارات تعود اليوم", delta_color="off")
 
-        st.divider()
+    st.divider()
 
-        with st.expander("🔎 أدوات عرض الجدول الزمني", expanded=False):
-            c1, c2 = st.columns(2)
-            period_type = c1.selectbox("نوع الفترة", ["شهر", "ربع سنوي", "سنة"])
-            sel_year = c2.selectbox("السنة", [2024, 2025, 2026, 2027], index=2)
-            c3, c4 = st.columns(2)
-            if period_type == "شهر": sel_spec = c3.selectbox("الشهر", range(1, 13), index=today.month-1)
-            elif period_type == "ربع سنوي": sel_spec = c3.selectbox("الربع", [1, 2, 3, 4], index=0)
-            else: sel_spec = 0 
-            
-            fleet_status = c4.selectbox("عرض الأسطول في الجدول", ["السيارات النشطة", "الكل", "السيارات المتوقفة (أرشيف)"], index=0)
-
-        # Filter cars for the TIMELINE based on selection
-        if fleet_status == "السيارات النشطة": cars_subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
-        elif fleet_status == "السيارات المتوقفة (أرشيف)": cars_subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
-        else: cars_subset = valid_rows
-        
-        for _, row in cars_subset.iterrows(): 
-            try:
-                c_id = clean_id_tag(val(row, col_code))
-                yr_val = val(row, col_model_yr)
-                yr_str = str(yr_val).split('.')[0] if pd.notnull(yr_val) else ""
-                yr_formatted = f" ({yr_str})" if yr_str and yr_str.lower() != 'nan' else ""
-                
-                c_name = f"{val(row, col_brand)} {val(row, col_model)}{yr_formatted}"
-                plate = "".join([str(val(row, p)) + " " for p in plate_cols if pd.notnull(val(row, p))]).strip()
-                indicator = car_status_map.get(c_id, "🟢") 
-                
-                car_map[c_id] = f"{indicator} {c_name} | {plate}"
-            except: continue
+    with st.expander("🔎 أدوات عرض الجدول الزمني", expanded=False):
+        c1, c2 = st.columns(2)
+        period_type = c1.selectbox("نوع الفترة", ["شهر", "ربع سنوي", "سنة"])
+        sel_year = c2.selectbox("السنة", [2024, 2025, 2026, 2027], index=2)
+        c3, c4 = st.columns(2)
+        if period_type == "شهر": sel_spec = c3.selectbox("الشهر", range(1, 13), index=today.month-1)
+        elif period_type == "ربع سنوي": sel_spec = c3.selectbox("الربع", [1, 2, 3, 4], index=0)
+        else: sel_spec = 0 
+        fleet_status = c4.selectbox("عرض الأسطول في الجدول", ["السيارات النشطة", "الكل", "السيارات المتوقفة (أرشيف)"], index=0)
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
+
+    # Filter cars for timeline
+    car_map = {}
+    for cid, cdata in car_dict.items():
+        if fleet_status == "السيارات النشطة" and not cdata['is_active']: continue
+        if fleet_status == "السيارات المتوقفة (أرشيف)" and cdata['is_active']: continue
+        indicator = car_status_map.get(cid, "🟢")
+        # Put indicator inside the RLM so it renders beautifully RTL
+        car_map[cid] = f"{indicator} {cdata['label']}"
 
     st.markdown(f"### 🗓️ الجدول الزمني للأسطول ({period_type})")
     timeline_data = []
@@ -270,14 +312,11 @@ def show_control_tower(dfs):
                 s_date = parse_ar_date(val(row, col_start))
                 e_date = parse_ar_date(val(row, col_end))
                 if pd.isna(s_date) or pd.isna(e_date): continue
-                
-                # STRICT PERIOD FILTER
                 if not (s_date <= end_range and e_date >= start_range): continue
                 
                 car_id_clean = clean_id_tag(val(row, col_car_ord))
                 if car_id_clean not in car_map: continue
                 
-                # Dynamic Status
                 if s_date <= today <= e_date:
                     if e_date <= today + timedelta(hours=24): status = "ينتهي قريباً"
                     else: status = "نشط"
@@ -301,12 +340,14 @@ def show_control_tower(dfs):
     if not df_timeline.empty:
         color_map = {"نشط": "#ff4b4b", "ينتهي قريباً": "#f39c12", "قادم": "#9b59b6", "مكتمل": "#95a5a6", "متاح": "#2e3440"}
         fig = px.timeline(df_timeline, x_start="البدء", x_end="الانتهاء", y="السيارة", color="الحالة", color_discrete_map=color_map, hover_data=["العميل"])
-        fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=sorted(list(car_map.values())), type='category')
+        
+        # CRITICAL FIX: dtick=1 forces every single car label to render
+        fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=sorted(list(car_map.values())), type='category', dtick=1)
         
         fig.update_layout(
             height=max(400, len(car_map) * 35), 
             plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", 
-            font=dict(color="white", size=11), 
+            font=dict(color="white", size=12), 
             margin=dict(l=10, r=10, t=10, b=10),
             xaxis=dict(range=[start_range, end_range])
         )
@@ -319,13 +360,14 @@ def show_control_tower(dfs):
 def show_order_book(dfs):
     st.title("📋 دفتر الطلبات الموحد")
     if not dfs: return
-    df_orders = dfs['orders']
+    df_orders, df_cars = dfs['orders'], dfs['cars']
+    car_dict = build_car_dict(df_cars)
 
     st.markdown("سجل مركزي لجميع الحجوزات والعمليات مع تتبع الحالات المالية.")
     
     c_id = get_col_by_letter(df_orders, 'A')
     c_client = get_col_by_letter(df_orders, 'C')
-    c_car = get_col_by_letter(df_orders, 'E') # Assumes column E already has the formulated name
+    c_car = get_col_by_letter(df_orders, 'D') # Use code to get beautiful name
     c_start = get_col_by_letter(df_orders, 'L')
     c_end = get_col_by_letter(df_orders, 'T')
     c_total = get_col_by_letter(df_orders, 'AU')
@@ -343,11 +385,14 @@ def show_order_book(dfs):
                 s, e = parse_ar_date(val(row, c_start)), parse_ar_date(val(row, c_end))
                 stat = get_status_badge(s, e)
                 
+                cid = clean_id_tag(val(row, c_car))
+                car_name = car_dict.get(cid, {}).get('label', cid)
+                
                 orders_list.append({
                     "رقم الطلب": str(row_id),
                     "الحالة": stat,
                     "العميل": str(val(row, c_client)) if pd.notnull(val(row, c_client)) else "",
-                    "السيارة": str(val(row, c_car)) if pd.notnull(val(row, c_car)) else "",
+                    "السيارة": car_name,
                     "البدء": s.strftime("%Y-%m-%d %I:%M %p") if pd.notnull(s) else "-",
                     "الانتهاء": e.strftime("%Y-%m-%d %I:%M %p") if pd.notnull(e) else "-",
                     "الإجمالي (EGP)": clean_currency(val(row, c_total)),
@@ -385,31 +430,18 @@ def show_vehicle_360(dfs):
     if not dfs: return
 
     df_cars, df_orders, df_car_exp = dfs['cars'], dfs['orders'], dfs['car_expenses']
+    car_dict = build_car_dict(df_cars)
 
     with st.expander("🔎 التحكم", expanded=True):
         col1, col2 = st.columns([1, 2])
         with col1: fleet_cat = st.radio("التصنيف", ["النشطة", "الأرشيف", "الكل"], horizontal=True)
         with col2:
             car_options = {}
-            col_code, col_status = get_col_by_letter(df_cars, 'A'), get_col_by_letter(df_cars, 'AZ')
-            col_model_yr = get_col_by_letter(df_cars, 'H')
-            plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC']
-            if col_code and col_status:
-                valid_rows = df_cars[df_cars[col_code].notna() & (df_cars[col_code].astype(str).str.strip() != "")]
-                if fleet_cat == "النشطة": subset = valid_rows[valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
-                elif fleet_cat == "الأرشيف": subset = valid_rows[~valid_rows[col_status].astype(str).str.contains('Valid|Active|ساري', case=False, na=False)]
-                else: subset = valid_rows 
-                for _, row in subset.iterrows():
-                    try:
-                        c_id = clean_id_tag(val(row, col_code))
-                        yr_val = val(row, col_model_yr)
-                        yr_str = str(yr_val).split('.')[0] if pd.notnull(yr_val) else ""
-                        yr_formatted = f" ({yr_str})" if yr_str and yr_str.lower() != 'nan' else ""
-                        
-                        c_label = f"{val(row, get_col_by_letter(df_cars, 'B'))} {val(row, get_col_by_letter(df_cars, 'E'))}{yr_formatted}"
-                        plate = "".join([str(val(row, p)) + " " for p in plate_cols if pd.notnull(val(row, p))]).strip()
-                        car_options[f"[{val(row, col_code)}] {c_label} | {plate}"] = c_id
-                    except: continue
+            for cid, cdata in car_dict.items():
+                if fleet_cat == "النشطة" and not cdata['is_active']: continue
+                if fleet_cat == "الأرشيف" and cdata['is_active']: continue
+                car_options[f"[{cid}] {cdata['label']}"] = cid
+                
             select_all = st.checkbox("تحديد الكل")
             selected_labels = st.multiselect("المركبات", list(car_options.keys()), default=list(car_options.keys()) if select_all else [])
             selected_ids = [car_options[l] for l in selected_labels]
@@ -509,22 +541,7 @@ def show_crm(dfs):
     st.title("👥 إدارة العملاء")
     if not dfs: return
     df_orders, df_clients, df_cars = dfs['orders'], dfs['clients'], dfs['cars']
-
-    car_display_map = {}
-    col_code = get_col_by_letter(df_cars, 'A')
-    col_model_yr = get_col_by_letter(df_cars, 'H')
-    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC']
-    if col_code:
-        for _, row in df_cars.iterrows():
-            try:
-                cid = clean_id_tag(val(row, col_code))
-                yr_val = val(row, col_model_yr)
-                yr_str = str(yr_val).split('.')[0] if pd.notnull(yr_val) else ""
-                yr_formatted = f" ({yr_str})" if yr_str and yr_str.lower() != 'nan' else ""
-                
-                cname = f"{val(row, get_col_by_letter(df_cars, 'B'))} {val(row, get_col_by_letter(df_cars, 'E'))}{yr_formatted} | " + "".join([str(val(row, p)) + " " for p in plate_cols if pd.notnull(val(row, p))]).strip()
-                car_display_map[cid] = cname
-            except: continue
+    car_dict = build_car_dict(df_cars)
 
     client_id_map, client_db = {}, {}
     col_cl_id, col_cl_first, col_cl_last = get_col_by_letter(df_clients, 'A'), get_col_by_letter(df_clients, 'C'), get_col_by_letter(df_clients, 'D')
@@ -543,7 +560,7 @@ def show_crm(dfs):
 
     col_ord_name, col_ord_cost, col_ord_s, col_ord_e = get_col_by_letter(df_orders, 'B'), get_col_by_letter(df_orders, 'AU'), get_col_by_letter(df_orders, 'L'), get_col_by_letter(df_orders, 'T')
     col_ord_dep_held, col_ord_usd, col_ord_eur = get_col_by_letter(df_orders, 'AW'), get_col_by_letter(df_orders, 'AY'), get_col_by_letter(df_orders, 'AZ')
-    col_ord_car_name, col_ord_id = get_col_by_letter(df_orders, 'E'), get_col_by_letter(df_orders, 'A')
+    col_ord_car_id, col_ord_id = get_col_by_letter(df_orders, 'D'), get_col_by_letter(df_orders, 'A')
 
     if col_ord_name:
         for _, row in df_orders.iterrows():
@@ -558,6 +575,8 @@ def show_crm(dfs):
                 s, e = parse_ar_date(val(row, col_ord_s)), parse_ar_date(val(row, col_ord_e))
                 
                 stat = get_status_badge(s, e)
+                car_id_clean = clean_id_tag(val(row, col_ord_car_id))
+                car_name = car_dict.get(car_id_clean, {}).get('label', car_id_clean)
                 
                 rec['Spend'] += amt
                 rec['PaidUSD'] += usd
@@ -566,7 +585,7 @@ def show_crm(dfs):
                 rec['Trips'] += 1
                 rec['History'].append({
                     "رقم الطلب": str(val(row, col_ord_id)),
-                    "السيارة": str(val(row, col_ord_car_name)),
+                    "السيارة": car_name,
                     "البدء": s.strftime("%Y-%m-%d") if pd.notnull(s) else "-", 
                     "التكلفة": format_egp(amt), "الحالة": stat, "وديعة معلقة": format_egp(dep)
                 })
@@ -613,6 +632,7 @@ def show_financial_hq(dfs):
     if not dfs: return
 
     df_coll, df_exp, df_car_exp, df_cars, df_orders = dfs['collections'], dfs['expenses'], dfs['car_expenses'], dfs['cars'], dfs['orders']
+    car_dict = build_car_dict(df_cars)
 
     with st.expander("🗓️ إعدادات الفترة و الحساب", expanded=True):
         f1, f2, f3 = st.columns(3)
@@ -703,27 +723,19 @@ def show_financial_hq(dfs):
             except: continue
 
     # 5. Generate Accruals
-    col_code, col_owner_f, col_owner_l, col_contract_start, col_monthly_fee, col_pay_freq, col_deduct_pct, col_brokerage, col_model_yr, col_car_name, col_status = get_col_by_letter(df_cars, 'A'), get_col_by_letter(df_cars, 'BP'), get_col_by_letter(df_cars, 'BQ'), get_col_by_letter(df_cars, 'AW'), get_col_by_letter(df_cars, 'CJ'), get_col_by_letter(df_cars, 'CK'), get_col_by_letter(df_cars, 'CL'), get_col_by_letter(df_cars, 'CM'), get_col_by_letter(df_cars, 'H'), get_col_by_letter(df_cars, 'B'), get_col_by_letter(df_cars, 'AZ')
-    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC']
+    col_code, col_owner_f, col_owner_l, col_contract_start, col_monthly_fee, col_pay_freq, col_deduct_pct, col_brokerage = get_col_by_letter(df_cars, 'A'), get_col_by_letter(df_cars, 'BP'), get_col_by_letter(df_cars, 'BQ'), get_col_by_letter(df_cars, 'AW'), get_col_by_letter(df_cars, 'CJ'), get_col_by_letter(df_cars, 'CK'), get_col_by_letter(df_cars, 'CL'), get_col_by_letter(df_cars, 'CM')
     cid_to_meta, future_limit = {}, datetime(sel_year, 12, 31) 
 
     if col_code:
-        for _, row in df_cars.iterrows():
+        for cid, cdata in car_dict.items():
+            if not cdata['is_active']: continue
+            row = cdata['raw_row']
             try:
-                if not any(x in str(val(row, col_status)).lower() for x in ['valid', 'active', 'ساري']): continue
-                cid = clean_id_tag(val(row, col_code))
                 owner_name = f"{val(row, col_owner_f)} {val(row, col_owner_l)}".strip()
                 if not owner_name: owner_name = f"Owner {cid}"
                 
-                yr_val = val(row, col_model_yr)
-                yr_str = str(yr_val).split('.')[0] if pd.notnull(yr_val) else ""
-                yr_formatted = f" ({yr_str})" if yr_str and yr_str.lower() != 'nan' else ""
-                
-                cname = f"{val(row, col_car_name)} {val(row, get_col_by_letter(df_cars, 'E'))}{yr_formatted}"
-                plate = "".join([str(val(row, p)) + " " for p in plate_cols if pd.notnull(val(row, p))]).strip()
-                
-                search_key = f"[{cid}] {owner_name} - {cname} | {plate}"
-                cid_to_meta[cid] = {'Label': search_key, 'Owner': owner_name, 'Car': cname}
+                search_key = f"[{cid}] {owner_name} - {cdata['label']}"
+                cid_to_meta[cid] = {'Label': search_key, 'Owner': owner_name, 'Car': cdata['label']}
                 
                 s_date = pd.to_datetime(val(row, col_contract_start), errors='coerce')
                 if pd.isna(s_date): continue
@@ -836,27 +848,21 @@ def show_risk_radar(dfs):
     st.title("⚠️ رادار المخاطر")
     if not dfs: return
     df_cars = dfs['cars']
+    car_dict = build_car_dict(df_cars)
     today = get_now() 
     risks = {'License': [], 'Insurance': [], 'Contract': []}
     
     col_lic_end, col_exam_end, col_lic_status = get_col_by_letter(df_cars, 'AQ'), get_col_by_letter(df_cars, 'BD'), get_col_by_letter(df_cars, 'AT')
     col_ins_end, col_ins_status, col_con_end = get_col_by_letter(df_cars, 'BJ'), get_col_by_letter(df_cars, 'BN'), get_col_by_letter(df_cars, 'BC')
-    col_name, col_model, col_code, col_status = get_col_by_letter(df_cars, 'B'), get_col_by_letter(df_cars, 'E'), get_col_by_letter(df_cars, 'A'), get_col_by_letter(df_cars, 'AZ')
-    col_model_yr = get_col_by_letter(df_cars, 'H')
-    plate_cols = ['W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC'] 
+    col_code = get_col_by_letter(df_cars, 'A')
 
     if col_code:
         for _, row in df_cars.iterrows():
             try:
-                if not any(x in str(val(row, col_status)).lower() for x in ['valid', 'active', 'ساري']): continue
                 cid = clean_id_tag(val(row, col_code))
-                
-                yr_val = val(row, col_model_yr)
-                yr_str = str(yr_val).split('.')[0] if pd.notnull(yr_val) else ""
-                yr_formatted = f" ({yr_str})" if yr_str and yr_str.lower() != 'nan' else ""
-
-                cname = f"[{cid}] {val(row, col_name)} {val(row, col_model)}{yr_formatted}"
-                plate = "".join([str(val(row, p)) + " " for p in plate_cols if pd.notnull(val(row, p))]).strip()
+                cdata = car_dict.get(cid)
+                if not cdata or not cdata['is_active']: continue
+                cname = cdata['label']
                 
                 if col_lic_status and any(x in str(val(row, col_lic_status)).lower() for x in ['valid', 'active', 'ساري']):
                     d_lic, d_exam = pd.to_datetime(val(row, col_lic_end), errors='coerce'), pd.to_datetime(val(row, col_exam_end), errors='coerce')
@@ -867,21 +873,21 @@ def show_risk_radar(dfs):
                     if target:
                         days = (target - today).days
                         bucket = "🔴 خطر مرتفع (0-3 أشهر)" if days <= 90 else ("🟡 خطر متوسط (3-6 أشهر)" if days <= 180 else "🟢 خطر منخفض (> 6 أشهر)")
-                        risks['License'].append({'السيارة': cname, 'اللوحة': plate, 'السبب': reason, 'الاستحقاق': target.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
+                        risks['License'].append({'السيارة': cname, 'السبب': reason, 'الاستحقاق': target.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
 
                 if col_ins_status and ("yes" in str(val(row, col_ins_status)).lower() or "يوجد" in str(val(row, col_ins_status)).lower()):
                     d = pd.to_datetime(val(row, col_ins_end), errors='coerce')
                     if pd.notnull(d):
                         days = (d - today).days
                         bucket = "🔴 خطر مرتفع (0-3 أشهر)" if days <= 90 else ("🟡 خطر متوسط (3-6 أشهر)" if days <= 180 else "🟢 خطر منخفض (> 6 أشهر)")
-                        risks['Insurance'].append({'السيارة': cname, 'اللوحة': plate, 'الاستحقاق': d.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
+                        risks['Insurance'].append({'السيارة': cname, 'الاستحقاق': d.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
 
                 if col_con_end:
                     d = pd.to_datetime(val(row, col_con_end), errors='coerce')
                     if pd.notnull(d):
                         days = (d - today).days
                         bucket = "🔴 خطر مرتفع (0-3 أشهر)" if days <= 90 else ("🟡 خطر متوسط (3-6 أشهر)" if days <= 180 else "🟢 خطر منخفض (> 6 أشهر)")
-                        risks['Contract'].append({'السيارة': cname, 'اللوحة': plate, 'الاستحقاق': d.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
+                        risks['Contract'].append({'السيارة': cname, 'الاستحقاق': d.strftime("%Y-%m-%d"), 'التصنيف': bucket, 'Days': days})
             except: continue
 
     t1, t2, t3 = st.tabs(["📄 الترخيص والفحص", "🛡️ التأمين", "📝 عقود الملاك"])
