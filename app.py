@@ -225,7 +225,9 @@ def show_control_tower(dfs):
                 plate = "".join([str(val(row, p)) + " " for p in plate_cols if pd.notnull(val(row, p))])
                 indicator = car_status_map.get(c_id, "🟢") 
                 if indicator == "🔴": active_rentals += 1 
-                car_map[c_id] = f"{c_name} | {plate.strip()}"
+                
+                # FIXED: Adding indicator back to string for proper RTL alignment
+                car_map[c_id] = f"{indicator} {c_name} | {plate.strip()}"
             except: continue
 
     # High-Level Metrics
@@ -238,13 +240,21 @@ def show_control_tower(dfs):
 
     st.divider()
 
-    # Timeline Generation (Next 90 Days)
-    st.markdown("### 🗓️ الجدول الزمني للأسطول")
+    with st.expander("🔎 أدوات عرض الجدول الزمني", expanded=False):
+        c1, c2 = st.columns(2)
+        period_type = c1.selectbox("نوع الفترة", ["شهر", "ربع سنوي", "سنة"])
+        sel_year = c2.selectbox("السنة", [2024, 2025, 2026, 2027], index=2)
+        c3, c4 = st.columns(2)
+        if period_type == "شهر": sel_spec = c3.selectbox("الشهر", range(1, 13), index=get_now().month-1)
+        elif period_type == "ربع سنوي": sel_spec = c3.selectbox("الربع", [1, 2, 3, 4], index=0)
+        else: sel_spec = 0 
+
+    # FIXED: Reverted to strict Period Tracking based on user selection to prevent hidden history
+    start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
+
+    st.markdown(f"### 🗓️ الجدول الزمني للأسطول ({period_type})")
     timeline_data = []
     col_client = get_col_by_letter(df_orders, 'C') 
-    
-    end_horizon = today + timedelta(days=90) # Extented to 90 days for better future visibility
-    start_horizon = today - timedelta(days=5) 
     
     if col_start and col_end and col_car_ord:
         for _, row in df_orders.iterrows():
@@ -252,7 +262,9 @@ def show_control_tower(dfs):
                 s_date = parse_ar_date(val(row, col_start))
                 e_date = parse_ar_date(val(row, col_end))
                 if pd.isna(s_date) or pd.isna(e_date): continue
-                if not (s_date <= end_horizon and e_date >= start_horizon): continue
+                
+                # Filter strictly by selected period
+                if not (s_date <= end_range and e_date >= start_range): continue
                 
                 car_id_clean = clean_id_tag(val(row, col_car_ord))
                 if car_id_clean not in car_map: continue
@@ -278,6 +290,7 @@ def show_control_tower(dfs):
 
     df_timeline = pd.DataFrame(timeline_data) if timeline_data else pd.DataFrame(columns=['السيارة', 'البدء', 'الانتهاء', 'الحالة', 'العميل'])
     
+    # Ensure all cars show up even if empty
     for car_name in sorted(list(car_map.values())):
         if car_name not in df_timeline['السيارة'].values:
             df_timeline = pd.concat([df_timeline, pd.DataFrame([{'السيارة': car_name, 'البدء': pd.NaT, 'الانتهاء': pd.NaT, 'الحالة': 'متاح', 'العميل': '-'}])], ignore_index=True)
@@ -286,8 +299,19 @@ def show_control_tower(dfs):
         color_map = {"نشط": "#ff4b4b", "ينتهي قريباً": "#f39c12", "قادم": "#9b59b6", "مكتمل": "#95a5a6", "متاح": "#2e3440"}
         fig = px.timeline(df_timeline, x_start="البدء", x_end="الانتهاء", y="السيارة", color="الحالة", color_discrete_map=color_map, hover_data=["العميل"])
         fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=sorted(list(car_map.values())), type='category')
-        fig.update_layout(height=max(400, len(car_map) * 35), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white", size=11), margin=dict(l=10, r=10, t=10, b=10))
-        fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="solid", line_color="#50fa7b", annotation_text="اليوم")
+        
+        # Lock view strictly to the selected period bounds for cleaner view
+        fig.update_layout(
+            height=max(400, len(car_map) * 35), 
+            plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", 
+            font=dict(color="white", size=11), 
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(range=[start_range, end_range])
+        )
+        # Draw "Today" line only if Today is within the selected period
+        if start_range <= today <= end_range:
+            fig.add_vline(x=today.timestamp() * 1000, line_width=2, line_dash="solid", line_color="#50fa7b", annotation_text="اليوم")
+            
         st.plotly_chart(fig, use_container_width=True)
 
 # --- MODULE 2: MASTER ORDER BOOK ---
@@ -498,8 +522,6 @@ def show_crm(dfs):
             try:
                 cid = clean_client_code(val(row, col_cl_id))
                 fname = str(val(row, col_cl_first)) if pd.notnull(val(row, col_cl_first)) else ""
-                
-                # FIXED SYNTAX ERROR HERE
                 lname = str(val(row, col_cl_last)) if pd.notnull(val(row, col_cl_last)) else ""
                 
                 full_name = f"{fname} {lname}".strip()
