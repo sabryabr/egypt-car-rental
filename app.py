@@ -129,7 +129,6 @@ def get_col_by_letter(df, letter):
     return None
 
 def val(row, col_name):
-    """Safely extracts a value from a row even if the column is missing."""
     if col_name is None: return None
     return row.get(col_name)
 
@@ -162,7 +161,10 @@ def parse_ar_date(x):
 def get_status_badge(s_date, e_date):
     if pd.isna(s_date) or pd.isna(e_date): return "⚪ غير محدد"
     today = get_now()
-    if s_date <= today <= e_date: return "🟢 نشط"
+    if s_date <= today <= e_date: 
+        if e_date <= today + timedelta(hours=24):
+            return "🟠 ينتهي قريباً"
+        return "🟢 نشط"
     elif s_date > today: return "🟡 قادم"
     else: return "⚪ مكتمل"
 
@@ -236,12 +238,12 @@ def show_control_tower(dfs):
 
     st.divider()
 
-    # Timeline Generation (Next 30 Days)
-    st.markdown("### 🗓️ الجدول الزمني (الـ 30 يوماً القادمة)")
+    # Timeline Generation (Next 90 Days)
+    st.markdown("### 🗓️ الجدول الزمني للأسطول")
     timeline_data = []
     col_client = get_col_by_letter(df_orders, 'C') 
     
-    end_horizon = today + timedelta(days=30)
+    end_horizon = today + timedelta(days=90) # Extented to 90 days for better future visibility
     start_horizon = today - timedelta(days=5) 
     
     if col_start and col_end and col_car_ord:
@@ -255,7 +257,17 @@ def show_control_tower(dfs):
                 car_id_clean = clean_id_tag(val(row, col_car_ord))
                 if car_id_clean not in car_map: continue
                 
-                status = "نشط" if s_date <= today <= e_date else ("قادم" if s_date > today else "مكتمل")
+                # Dynamic Status
+                if s_date <= today <= e_date:
+                    if e_date <= today + timedelta(hours=24):
+                        status = "ينتهي قريباً"
+                    else:
+                        status = "نشط"
+                elif s_date > today:
+                    status = "قادم"
+                else:
+                    status = "مكتمل"
+
                 client_name = str(val(row, col_client)) if pd.notnull(val(row, col_client)) else "غير معروف"
                 
                 timeline_data.append({
@@ -271,7 +283,7 @@ def show_control_tower(dfs):
             df_timeline = pd.concat([df_timeline, pd.DataFrame([{'السيارة': car_name, 'البدء': pd.NaT, 'الانتهاء': pd.NaT, 'الحالة': 'متاح', 'العميل': '-'}])], ignore_index=True)
 
     if not df_timeline.empty:
-        color_map = {"نشط": "#ff4b4b", "قادم": "#9b59b6", "مكتمل": "#95a5a6", "متاح": "#2e3440"}
+        color_map = {"نشط": "#ff4b4b", "ينتهي قريباً": "#f39c12", "قادم": "#9b59b6", "مكتمل": "#95a5a6", "متاح": "#2e3440"}
         fig = px.timeline(df_timeline, x_start="البدء", x_end="الانتهاء", y="السيارة", color="الحالة", color_discrete_map=color_map, hover_data=["العميل"])
         fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=sorted(list(car_map.values())), type='category')
         fig.update_layout(height=max(400, len(car_map) * 35), plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white", size=11), margin=dict(l=10, r=10, t=10, b=10))
@@ -325,7 +337,7 @@ def show_order_book(dfs):
     if not df_display.empty:
         col1, col2 = st.columns([2, 1])
         search_q = col1.text_input("🔍 بحث برقم الطلب، العميل، أو السيارة")
-        stat_filter = col2.selectbox("فلتر الحالة", ["الكل", "🟢 نشط", "🟡 قادم", "⚪ مكتمل"])
+        stat_filter = col2.selectbox("فلتر الحالة", ["الكل", "🟢 نشط", "🟠 ينتهي قريباً", "🟡 قادم", "⚪ مكتمل"])
         
         if search_q: 
             df_display = df_display[df_display.apply(lambda r: r.astype(str).str.contains(search_q, case=False).any(), axis=1)]
@@ -381,7 +393,7 @@ def show_vehicle_360(dfs):
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
     if not selected_ids: st.info("👈 اختر المركبات."); return
 
-    trips_data, maint_list, exp_list = [], [], []
+    trips_data, maint_list, exp_list, all_history = [], [], [], []
     total_revenue, total_maint, total_exp = 0.0, 0.0, 0.0
     
     col_ord_start, col_ord_end, col_ord_cost, col_ord_car, col_ord_id = get_col_by_letter(df_orders, 'L'), get_col_by_letter(df_orders, 'T'), get_col_by_letter(df_orders, 'AU'), get_col_by_letter(df_orders, 'D'), get_col_by_letter(df_orders, 'A')
@@ -398,19 +410,19 @@ def show_vehicle_360(dfs):
                     dur_txt = str(val(row, col_ord_dur_txt)) if pd.notnull(val(row, col_ord_dur_txt)) else ""
                     stat = get_status_badge(d_s, d_e)
                     
-                    # Calculate simple daily rate fallback
                     days_calc = (d_e - d_s).days if pd.notnull(d_e) else 1
                     if days_calc == 0: days_calc = 1
                     
+                    start_str = d_s.strftime('%Y-%m-%d %I:%M %p')
+                    end_str = d_e.strftime('%Y-%m-%d %I:%M %p') if pd.notnull(d_e) else "-"
+                    car_full_name = [k for k, v in car_options.items() if v == cid][0]
+                    
                     trips_data.append({
-                        "السيارة": [k for k, v in car_options.items() if v == cid][0],
-                        "الطلب": str(val(row, col_ord_id)),
-                        "الحالة": stat,
-                        "البدء": d_s.strftime('%Y-%m-%d %I:%M %p'),
-                        "المدة": dur_txt,
-                        "اليومية التقريبية": format_egp(rev / days_calc),
-                        "الإجمالي": format_egp(rev)
+                        "السيارة": car_full_name, "رقم الطلب": val(row, col_ord_id), "الحالة": stat,
+                        "البدء": f"{start_str} - {val(row, col_ord_loc_start)}", "الانتهاء": f"{end_str} - {val(row, col_ord_loc_end)}",
+                        "المدة": dur_txt, "اليومية التقريبية": format_egp(rev / days_calc), "الإجمالي": format_egp(rev)
                     })
+                    all_history.append({"تاريخ للفرز": d_s, "التاريخ": start_str, "السيارة": car_full_name, "النوع": "🟢 إيجار", "البيان": f"طلب إيجار #{val(row, col_ord_id)}", "المبلغ": format_egp(rev)})
 
     # Expenses
     col_exp_car, col_exp_amt, col_exp_y, col_exp_m, col_exp_d, col_exp_rec = get_col_by_letter(df_car_exp, 'S'), get_col_by_letter(df_car_exp, 'Z'), get_col_by_letter(df_car_exp, 'Y'), get_col_by_letter(df_car_exp, 'X'), get_col_by_letter(df_car_exp, 'W'), get_col_by_letter(df_car_exp, 'A')
@@ -430,9 +442,18 @@ def show_vehicle_360(dfs):
                         is_maint = ("صيانات" in type_str or "Maintenance" in type_str)
                         display_name = str(val(row, col_exp_maint_ar)) if is_maint else f"{type_str} - {str(val(row, col_exp_stmt_ar))}"
 
-                        entry = {"السيارة": [k for k, v in car_options.items() if v == cid][0], "التاريخ": f"{y}-{m:02d}-{d_val:02d}", "البند": display_name, "التكلفة": format_egp(amt)}
-                        if is_maint: maint_list.append(entry); total_maint += amt
-                        else: exp_list.append(entry); total_exp += amt
+                        car_full_name = [k for k, v in car_options.items() if v == cid][0]
+                        dt_str = f"{y}-{m:02d}-{d_val:02d}"
+                        
+                        entry = {"السيارة": car_full_name, "التاريخ": dt_str, "البند": display_name, "التكلفة": format_egp(amt)}
+                        if is_maint: 
+                            maint_list.append(entry)
+                            total_maint += amt
+                            all_history.append({"تاريخ للفرز": datetime(y,m,d_val), "التاريخ": dt_str, "السيارة": car_full_name, "النوع": "🔧 صيانة", "البيان": display_name, "المبلغ": format_egp(amt)})
+                        else: 
+                            exp_list.append(entry)
+                            total_exp += amt
+                            all_history.append({"تاريخ للفرز": datetime(y,m,d_val), "التاريخ": dt_str, "السيارة": car_full_name, "النوع": "💸 مصروف/ملاك", "البيان": display_name, "المبلغ": format_egp(amt)})
                 except: continue
 
     k1, k2, k3, k4 = st.columns(4)
@@ -443,10 +464,15 @@ def show_vehicle_360(dfs):
     roi = total_revenue - total_maint - total_exp
     k4.metric("العائد الصافي (ROI)", format_egp(roi), delta_color="normal" if roi >= 0 else "inverse")
     
-    t1, t2, t3 = st.tabs(["الرحلات", "الصيانة", "المصروفات"])
+    t1, t2, t3, t4 = st.tabs(["الرحلات", "الصيانة", "المصروفات", "السجل الشامل (History)"])
     with t1: st.dataframe(pd.DataFrame(trips_data), use_container_width=True) if trips_data else st.info("فارغ")
     with t2: st.dataframe(pd.DataFrame(maint_list), use_container_width=True) if maint_list else st.info("فارغ")
     with t3: st.dataframe(pd.DataFrame(exp_list), use_container_width=True) if exp_list else st.info("فارغ")
+    with t4: 
+        if all_history:
+            df_hist = pd.DataFrame(all_history).sort_values("تاريخ للفرز", ascending=False).drop(columns=["تاريخ للفرز"])
+            st.dataframe(df_hist, use_container_width=True)
+        else: st.info("لا يوجد سجل لهذه السيارة في الفترة المحددة.")
 
 # --- MODULE 4: CRM ---
 def show_crm(dfs):
@@ -472,7 +498,10 @@ def show_crm(dfs):
             try:
                 cid = clean_client_code(val(row, col_cl_id))
                 fname = str(val(row, col_cl_first)) if pd.notnull(val(row, col_cl_first)) else ""
-                lname = str(val(row, col_cl_last)) if pd.notnull(val(row, col_cl_last]) else ""
+                
+                # FIXED SYNTAX ERROR HERE
+                lname = str(val(row, col_cl_last)) if pd.notnull(val(row, col_cl_last)) else ""
+                
                 full_name = f"{fname} {lname}".strip()
                 if not full_name: continue
                 client_id_map[cid] = full_name
@@ -598,7 +627,7 @@ def show_financial_hq(dfs):
                 if (period_type=="سنة" and y==sel_year) or (period_type=="شهر" and y==sel_year and m==sel_spec) or (period_type=="ربع سنوي" and y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]):
                     amt = clean_currency(val(row, col_coll_amt))
                     cash_in += amt
-                    inflow_cats["تأجير عام"] = inflow_cats.get("تأجير عام", 0) + amt
+                    inflow_cats["إيرادات سابقة"] = inflow_cats.get("إيرادات سابقة", 0) + amt
             except: continue
 
     # 3. Expenses
@@ -614,7 +643,7 @@ def show_financial_hq(dfs):
                     expense_cats[cat] = expense_cats.get(cat, 0) + amt
             except: continue
 
-    # 4. Car Expenses
+    # 4. Car Expenses (Ledger & Audit)
     col_cexp_amt, col_cexp_y, col_cexp_m, col_cexp_car, col_cexp_id_g = get_col_by_letter(df_car_exp, 'Z'), get_col_by_letter(df_car_exp, 'Y'), get_col_by_letter(df_car_exp, 'X'), get_col_by_letter(df_car_exp, 'S'), get_col_by_letter(df_car_exp, 'G') 
     ledger_history, contracting_audit = [], {}
     
@@ -676,7 +705,6 @@ def show_financial_hq(dfs):
                     curr_date += timedelta(days=freq_days)
             except: continue
 
-    # TABS
     tab1, tab2, tab3, tab4 = st.tabs(["📊 P&L والخزينة", "💱 سلة العملات والودائع", "🤝 تسويات الملاك", "📋 تفاصيل التدقيق"])
     
     with tab1:
