@@ -80,8 +80,7 @@ def load_data_v3():
                     raw_headers = vals[header_row]
                     data = vals[header_row+1:]
                     
-                    # Force max columns to capture everything
-                    max_cols = max(len(raw_headers), 60)
+                    max_cols = max(len(raw_headers), 60) # Ensure we capture up to col BH
                     for r in data:
                         if len(r) > max_cols: max_cols = len(r)
                     
@@ -209,7 +208,6 @@ def build_car_dict(df_cars):
         status_val = str(val(row, col_status)).lower()
         is_active = any(x in status_val for x in ['valid', 'active', 'ساري'])
         
-        # تنظيف الماركة من الأخطاء كـ Yes
         brand_val = str(val(row, col_brand)).strip()
         if brand_val.lower() in ['yes', 'no', 'نعم', 'لا', 'true', 'false', 'nan', 'valid', 'active']: brand_val = ""
         
@@ -226,7 +224,6 @@ def build_car_dict(df_cars):
         plate_parts = [str(val(row, p)).strip().replace('.0', '') for p in plate_cols if p and pd.notnull(val(row, p)) and str(val(row, p)).strip() not in ['nan', '']]
         plate = " ".join(plate_parts)
         
-        # حماية الاتجاه من اليمين لليسار في الرسم البياني
         if plate:
             full_label = f"\u200F{c_name} | {plate}\u200F"
         else:
@@ -292,7 +289,6 @@ def show_control_tower(dfs):
 
     start_range, end_range = get_date_filter_range(period_type, sel_year, sel_spec)
 
-    # بناء القائمة بناءً على الفلتر المختار، مع حماية اللغة العربية واللوحة
     car_map = {}
     for cid, cdata in car_dict.items():
         if fleet_status == "السيارات النشطة" and not cdata['is_active']: continue
@@ -315,7 +311,6 @@ def show_control_tower(dfs):
                 car_id_clean = clean_id_tag(val(row, col_car_ord))
                 if car_id_clean not in car_map: continue
                 
-                # Dynamic Status
                 if s_date <= today <= e_date:
                     if e_date <= today + timedelta(hours=24): status = "ينتهي قريباً"
                     else: status = "نشط"
@@ -332,7 +327,6 @@ def show_control_tower(dfs):
 
     df_timeline = pd.DataFrame(timeline_data) if timeline_data else pd.DataFrame(columns=['السيارة', 'البدء', 'الانتهاء', 'الحالة', 'العميل'])
     
-    # لضمان ظهور كل السيارات في القائمة حتى الفارغ منها
     for car_name in sorted(list(car_map.values())):
         if car_name not in df_timeline['السيارة'].values:
             df_timeline = pd.concat([df_timeline, pd.DataFrame([{'السيارة': car_name, 'البدء': pd.NaT, 'الانتهاء': pd.NaT, 'الحالة': 'متاح', 'العميل': '-'}])], ignore_index=True)
@@ -340,8 +334,6 @@ def show_control_tower(dfs):
     if not df_timeline.empty:
         color_map = {"نشط": "#ff4b4b", "ينتهي قريباً": "#f39c12", "قادم": "#9b59b6", "مكتمل": "#95a5a6", "متاح": "#2e3440"}
         fig = px.timeline(df_timeline, x_start="البدء", x_end="الانتهاء", y="السيارة", color="الحالة", color_discrete_map=color_map, hover_data=["العميل"])
-        
-        # dtick=1 يجبر الرسم البياني على إظهار كل الأسماء دون إخفاء
         fig.update_yaxes(autorange="reversed", categoryorder='array', categoryarray=sorted(list(car_map.values())), type='category', dtick=1)
         
         fig.update_layout(
@@ -363,15 +355,29 @@ def show_order_book(dfs):
     df_orders, df_cars = dfs['orders'], dfs['cars']
     car_dict = build_car_dict(df_cars)
 
-    st.markdown("سجل مركزي لجميع الحجوزات والعمليات مع تتبع الحالات المالية.")
+    st.markdown("سجل مركزي مفصل لجميع الحجوزات مع تتبع الإيرادات، الإضافات، والغرامات.")
     
     c_id = get_col_by_letter(df_orders, 'A')
     c_client = get_col_by_letter(df_orders, 'C')
     c_car = get_col_by_letter(df_orders, 'D') 
     c_start = get_col_by_letter(df_orders, 'L')
     c_end = get_col_by_letter(df_orders, 'T')
+    
+    # Detailed Financial Columns
+    c_rent_tot = get_col_by_letter(df_orders, 'X')
+    c_ins_tot = get_col_by_letter(df_orders, 'AA')
+    c_delivery = get_col_by_letter(df_orders, 'AC')
+    c_driver_tot = get_col_by_letter(df_orders, 'AE')
+    c_seat_tot = get_col_by_letter(df_orders, 'AG')
+    c_km_tot = get_col_by_letter(df_orders, 'AN')
+    c_hr_tot = get_col_by_letter(df_orders, 'AQ')
+    c_clean = get_col_by_letter(df_orders, 'AR')
+    c_damage = get_col_by_letter(df_orders, 'AT')
+    
     c_total = get_col_by_letter(df_orders, 'AU')
+    c_dep_coll = get_col_by_letter(df_orders, 'AB')
     c_dep_held = get_col_by_letter(df_orders, 'AW')
+    
     c_egp = get_col_by_letter(df_orders, 'AX')
     c_usd = get_col_by_letter(df_orders, 'AY')
     c_eur = get_col_by_letter(df_orders, 'AZ')
@@ -388,6 +394,10 @@ def show_order_book(dfs):
                 cid = clean_id_tag(val(row, c_car))
                 car_name = car_dict.get(cid, {}).get('label', cid)
                 
+                # Detailed breakdown calculations
+                extras = clean_currency(val(row, c_delivery)) + clean_currency(val(row, c_driver_tot)) + clean_currency(val(row, c_seat_tot))
+                fines_and_damages = clean_currency(val(row, c_km_tot)) + clean_currency(val(row, c_hr_tot)) + clean_currency(val(row, c_clean)) + clean_currency(val(row, c_damage))
+                
                 orders_list.append({
                     "رقم الطلب": str(row_id),
                     "الحالة": stat,
@@ -395,10 +405,15 @@ def show_order_book(dfs):
                     "السيارة": car_name,
                     "البدء": s.strftime("%Y-%m-%d %I:%M %p") if pd.notnull(s) else "-",
                     "الانتهاء": e.strftime("%Y-%m-%d %I:%M %p") if pd.notnull(e) else "-",
-                    "الإجمالي (EGP)": clean_currency(val(row, c_total)),
-                    "المدفوع (EGP)": clean_currency(val(row, c_egp)),
-                    "المدفوع (USD)": clean_currency(val(row, c_usd)),
-                    "المدفوع (EUR)": clean_currency(val(row, c_eur)),
+                    "الإيجار": clean_currency(val(row, c_rent_tot)),
+                    "التأمين": clean_currency(val(row, c_ins_tot)),
+                    "إضافات وتوصيل": extras,
+                    "غرامات وتلفيات": fines_and_damages,
+                    "الإجمالي المستحق": clean_currency(val(row, c_total)),
+                    "المدفوع EGP": clean_currency(val(row, c_egp)),
+                    "المدفوع USD": clean_currency(val(row, c_usd)),
+                    "المدفوع EUR": clean_currency(val(row, c_eur)),
+                    "وديعة محصلة": clean_currency(val(row, c_dep_coll)),
                     "الوديعة المعلقة": clean_currency(val(row, c_dep_held))
                 })
             except: continue
@@ -414,11 +429,11 @@ def show_order_book(dfs):
         if stat_filter != "الكل": 
             df_display = df_display[df_display["الحالة"] == stat_filter]
 
-        df_display["الإجمالي (EGP)"] = df_display["الإجمالي (EGP)"].apply(format_egp)
-        df_display["المدفوع (EGP)"] = df_display["المدفوع (EGP)"].apply(format_egp)
-        df_display["المدفوع (USD)"] = df_display["المدفوع (USD)"].apply(format_usd)
-        df_display["المدفوع (EUR)"] = df_display["المدفوع (EUR)"].apply(format_eur)
-        df_display["الوديعة المعلقة"] = df_display["الوديعة المعلقة"].apply(format_egp)
+        # Apply Currency Formatting
+        for col in ["الإيجار", "التأمين", "إضافات وتوصيل", "غرامات وتلفيات", "الإجمالي المستحق", "المدفوع EGP", "وديعة محصلة", "الوديعة المعلقة"]:
+            df_display[col] = df_display[col].apply(format_egp)
+        df_display["المدفوع USD"] = df_display["المدفوع USD"].apply(format_usd)
+        df_display["المدفوع EUR"] = df_display["المدفوع EUR"].apply(format_eur)
         
         st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
@@ -458,8 +473,10 @@ def show_vehicle_360(dfs):
     trips_data, maint_list, exp_list, all_history = [], [], [], []
     total_revenue, total_maint, total_exp = 0.0, 0.0, 0.0
     
-    col_ord_start, col_ord_end, col_ord_cost, col_ord_car, col_ord_id = get_col_by_letter(df_orders, 'L'), get_col_by_letter(df_orders, 'T'), get_col_by_letter(df_orders, 'AU'), get_col_by_letter(df_orders, 'D'), get_col_by_letter(df_orders, 'A')
+    col_ord_start, col_ord_end, col_ord_car, col_ord_id = get_col_by_letter(df_orders, 'L'), get_col_by_letter(df_orders, 'T'), get_col_by_letter(df_orders, 'D'), get_col_by_letter(df_orders, 'A')
     col_ord_loc_start, col_ord_loc_end, col_ord_dur_txt = get_col_by_letter(df_orders, 'M'), get_col_by_letter(df_orders, 'U'), get_col_by_letter(df_orders, 'V')
+    col_ord_total = get_col_by_letter(df_orders, 'AU')
+    col_ord_rent = get_col_by_letter(df_orders, 'X')
 
     if col_ord_start:
         for _, row in df_orders.iterrows():
@@ -467,13 +484,12 @@ def show_vehicle_360(dfs):
             if cid in selected_ids:
                 d_s, d_e = parse_ar_date(val(row, col_ord_start)), parse_ar_date(val(row, col_ord_end))
                 if pd.notnull(d_s) and start_range <= d_s <= end_range:
-                    rev = clean_currency(val(row, col_ord_cost))
+                    rev = clean_currency(val(row, col_ord_total))
+                    rent_only = clean_currency(val(row, col_ord_rent))
+                    
                     total_revenue += rev
                     dur_txt = str(val(row, col_ord_dur_txt)) if pd.notnull(val(row, col_ord_dur_txt)) else ""
                     stat = get_status_badge(d_s, d_e)
-                    
-                    days_calc = (d_e - d_s).days if pd.notnull(d_e) else 1
-                    if days_calc <= 0: days_calc = 1
                     
                     start_str = d_s.strftime('%Y-%m-%d %I:%M %p')
                     end_str = d_e.strftime('%Y-%m-%d %I:%M %p') if pd.notnull(d_e) else "-"
@@ -487,7 +503,7 @@ def show_vehicle_360(dfs):
                     trips_data.append({
                         "السيارة": car_full_name, "رقم الطلب": val(row, col_ord_id), "الحالة": stat,
                         "البدء": f"{start_str} - {val(row, col_ord_loc_start)}", "الانتهاء": f"{end_str} - {val(row, col_ord_loc_end)}",
-                        "المدة": dur_txt, "اليومية التقريبية": format_egp(rev / days_calc), "الإجمالي": format_egp(rev)
+                        "المدة": dur_txt, "الإيجار الصافي": format_egp(rent_only), "إضافات وغرامات": format_egp(rev - rent_only), "الإجمالي": format_egp(rev)
                     })
                     all_history.append({"تاريخ للفرز": d_s, "التاريخ": start_str, "السيارة": car_full_name, "النوع": "🟢 إيجار", "البيان": f"طلب إيجار #{val(row, col_ord_id)}", "المبلغ": format_egp(rev)})
 
@@ -539,29 +555,19 @@ def show_vehicle_360(dfs):
     t1, t2, t3, t4 = st.tabs(["الرحلات", "الصيانة", "المصروفات", "السجل الشامل (History)"])
     
     with t1: 
-        if trips_data:
-            st.dataframe(pd.DataFrame(trips_data), use_container_width=True)
-        else:
-            st.info("فارغ")
-            
+        if trips_data: st.dataframe(pd.DataFrame(trips_data), use_container_width=True)
+        else: st.info("فارغ")
     with t2: 
-        if maint_list:
-            st.dataframe(pd.DataFrame(maint_list), use_container_width=True)
-        else:
-            st.info("فارغ")
-            
+        if maint_list: st.dataframe(pd.DataFrame(maint_list), use_container_width=True)
+        else: st.info("فارغ")
     with t3: 
-        if exp_list:
-            st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
-        else:
-            st.info("فارغ")
-            
+        if exp_list: st.dataframe(pd.DataFrame(exp_list), use_container_width=True)
+        else: st.info("فارغ")
     with t4: 
         if all_history:
             df_hist = pd.DataFrame(all_history).sort_values("تاريخ للفرز", ascending=False).drop(columns=["تاريخ للفرز"])
             st.dataframe(df_hist, use_container_width=True)
-        else: 
-            st.info("لا يوجد سجل لهذه السيارة في الفترة المحددة.")
+        else: st.info("لا يوجد سجل لهذه السيارة في الفترة المحددة.")
 
 # --- MODULE 4: CRM ---
 def show_crm(dfs):
@@ -676,29 +682,59 @@ def show_financial_hq(dfs):
     inflow_cats, expense_cats = {}, {}
     cash_in, cash_out = 0.0, 0.0
     
-    # 1. Orders Data
+    # Detailed Order Columns for P&L Breakdown
+    c_rent_tot = get_col_by_letter(df_orders, 'X')
+    c_ins_tot = get_col_by_letter(df_orders, 'AA')
+    c_delivery = get_col_by_letter(df_orders, 'AC')
+    c_driver_tot = get_col_by_letter(df_orders, 'AE')
+    c_seat_tot = get_col_by_letter(df_orders, 'AG')
+    c_km_tot = get_col_by_letter(df_orders, 'AN')
+    c_hr_tot = get_col_by_letter(df_orders, 'AQ')
+    c_clean = get_col_by_letter(df_orders, 'AR')
+    c_damage = get_col_by_letter(df_orders, 'AT')
+    
+    c_total_cost = get_col_by_letter(df_orders, 'AU')
+    c_dep_coll, c_dep_ref, c_dep_held = get_col_by_letter(df_orders, 'AB'), get_col_by_letter(df_orders, 'AV'), get_col_by_letter(df_orders, 'AW')
+    c_egp, c_usd, c_eur = get_col_by_letter(df_orders, 'AX'), get_col_by_letter(df_orders, 'AY'), get_col_by_letter(df_orders, 'AZ')
+    col_ord_s = get_col_by_letter(df_orders, 'L')
+    
     total_egp, total_usd, total_eur = 0.0, 0.0, 0.0
     deposits_collected, deposits_refunded, deposits_held = 0.0, 0.0, 0.0
-    
-    col_ord_s = get_col_by_letter(df_orders, 'L')
-    col_ord_dep_coll, col_ord_dep_ref, col_ord_dep_held = get_col_by_letter(df_orders, 'AB'), get_col_by_letter(df_orders, 'AV'), get_col_by_letter(df_orders, 'AW')
-    col_ord_egp, col_ord_usd, col_ord_eur = get_col_by_letter(df_orders, 'AX'), get_col_by_letter(df_orders, 'AY'), get_col_by_letter(df_orders, 'AZ')
+    total_orders_revenue = 0.0
     
     if col_ord_s:
         for _, row in df_orders.iterrows():
             try:
                 s = parse_ar_date(val(row, col_ord_s))
                 if pd.notnull(s) and start_date <= s <= end_date:
-                    deposits_collected += clean_currency(val(row, col_ord_dep_coll))
-                    deposits_refunded += clean_currency(val(row, col_ord_dep_ref))
-                    deposits_held += clean_currency(val(row, col_ord_dep_held))
+                    # 1. Vault tracking
+                    deposits_collected += clean_currency(val(row, c_dep_coll))
+                    deposits_refunded += clean_currency(val(row, c_dep_ref))
+                    deposits_held += clean_currency(val(row, c_dep_held))
                     
-                    total_egp += clean_currency(val(row, col_ord_egp))
-                    total_usd += clean_currency(val(row, col_ord_usd))
-                    total_eur += clean_currency(val(row, col_ord_eur))
+                    total_egp += clean_currency(val(row, c_egp))
+                    total_usd += clean_currency(val(row, c_usd))
+                    total_eur += clean_currency(val(row, c_eur))
+                    
+                    # 2. P&L Breakdown from Orders
+                    rent = clean_currency(val(row, c_rent_tot))
+                    ins = clean_currency(val(row, c_ins_tot))
+                    delivery = clean_currency(val(row, c_delivery))
+                    extras = clean_currency(val(row, c_driver_tot)) + clean_currency(val(row, c_seat_tot))
+                    fines = clean_currency(val(row, c_km_tot)) + clean_currency(val(row, c_hr_tot))
+                    damages = clean_currency(val(row, c_clean)) + clean_currency(val(row, c_damage))
+                    
+                    if rent > 0: inflow_cats["إيجار سيارات"] = inflow_cats.get("إيجار سيارات", 0) + rent
+                    if ins > 0: inflow_cats["إيراد تأمين"] = inflow_cats.get("إيراد تأمين", 0) + ins
+                    if delivery > 0: inflow_cats["رسوم توصيل واستلام"] = inflow_cats.get("رسوم توصيل واستلام", 0) + delivery
+                    if extras > 0: inflow_cats["إضافات (سائق/كرسي)"] = inflow_cats.get("إضافات (سائق/كرسي)", 0) + extras
+                    if fines > 0: inflow_cats["غرامات تأخير ومسافة"] = inflow_cats.get("غرامات تأخير ومسافة", 0) + fines
+                    if damages > 0: inflow_cats["رسوم نظافة وتلفيات"] = inflow_cats.get("رسوم نظافة وتلفيات", 0) + damages
+                    
+                    total_orders_revenue += clean_currency(val(row, c_total_cost))
             except: continue
 
-    # 2. Collections (Legacy)
+    # Collections (Legacy)
     col_coll_amt, col_coll_y, col_coll_m = get_col_by_letter(df_coll, 'R'), get_col_by_letter(df_coll, 'Q'), get_col_by_letter(df_coll, 'P')
     if col_coll_amt:
         for _, row in df_coll.iterrows():
@@ -707,10 +743,10 @@ def show_financial_hq(dfs):
                 if (period_type=="سنة" and y==sel_year) or (period_type=="شهر" and y==sel_year and m==sel_spec) or (period_type=="ربع سنوي" and y==sel_year and m in {1:[1,2,3], 2:[4,5,6], 3:[7,8,9], 4:[10,11,12]}[sel_spec]):
                     amt = clean_currency(val(row, col_coll_amt))
                     cash_in += amt
-                    inflow_cats["إيرادات سابقة"] = inflow_cats.get("إيرادات سابقة", 0) + amt
+                    inflow_cats["إيرادات عامة (تحصيلات)"] = inflow_cats.get("إيرادات عامة (تحصيلات)", 0) + amt
             except: continue
 
-    # 3. Expenses
+    # Expenses
     col_exp_amt, col_exp_y, col_exp_m, col_exp_type = get_col_by_letter(df_exp, 'X'), get_col_by_letter(df_exp, 'W'), get_col_by_letter(df_exp, 'V'), get_col_by_letter(df_exp, 'I')
     if col_exp_amt:
         for _, row in df_exp.iterrows():
@@ -723,7 +759,7 @@ def show_financial_hq(dfs):
                     expense_cats[cat] = expense_cats.get(cat, 0) + amt
             except: continue
 
-    # 4. Car Expenses (Ledger & Audit)
+    # Car Expenses (Ledger & Audit)
     col_cexp_amt, col_cexp_y, col_cexp_m, col_cexp_car, col_cexp_id_g = get_col_by_letter(df_car_exp, 'Z'), get_col_by_letter(df_car_exp, 'Y'), get_col_by_letter(df_car_exp, 'X'), get_col_by_letter(df_car_exp, 'S'), get_col_by_letter(df_car_exp, 'G') 
     ledger_history, contracting_audit = [], {}
     
@@ -749,7 +785,7 @@ def show_financial_hq(dfs):
                 elif type_id in ['3', '4']: ledger_history.append({'CID': cid, 'Date': txn_date, 'Type': 'خصم صيانة', 'Amount': -amt, 'Sort': 2, 'Icon': '🔧'})
             except: continue
 
-    # 5. Generate Accruals
+    # Generate Accruals
     col_code, col_owner_f, col_owner_l, col_contract_start, col_monthly_fee, col_pay_freq, col_deduct_pct, col_brokerage = get_col_by_letter(df_cars, 'A'), get_col_by_letter(df_cars, 'BP'), get_col_by_letter(df_cars, 'BQ'), get_col_by_letter(df_cars, 'AW'), get_col_by_letter(df_cars, 'CJ'), get_col_by_letter(df_cars, 'CK'), get_col_by_letter(df_cars, 'CL'), get_col_by_letter(df_cars, 'CM')
     cid_to_meta, future_limit = {}, datetime(sel_year, 12, 31) 
 
@@ -780,18 +816,23 @@ def show_financial_hq(dfs):
                     curr_date += timedelta(days=freq_days)
             except: continue
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 P&L والخزينة", "💱 سلة العملات والودائع", "🤝 تسويات الملاك", "📋 تفاصيل التدقيق"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 P&L تفصيلي", "💱 سلة العملات والودائع", "🤝 تسويات الملاك", "📋 تفاصيل التدقيق"])
     
     with tab1:
         st.markdown("##### الأرباح والخسائر للعمليات (Cash Flow)")
-        rev = cash_in + total_egp 
-        items = [('الإيرادات', rev)]
-        for k, v in expense_cats.items(): items.append((k, -v))
+        
+        # Construct Waterfall with broken down revenue
+        items = []
+        for k, v in inflow_cats.items():
+            if v > 0: items.append((k, v))
+        for k, v in expense_cats.items():
+            if v > 0: items.append((k, -v))
+            
         df_waterfall = pd.DataFrame(items, columns=['Category', 'Amount'])
-        net_profit = df_waterfall['Amount'].sum()
+        net_profit = df_waterfall['Amount'].sum() if not df_waterfall.empty else 0.0
         
         k1, k2, k3 = st.columns(3)
-        k1.metric("إجمالي الدخل (EGP)", format_egp(rev))
+        k1.metric("إجمالي الدخل / الفواتير (EGP)", format_egp(sum(inflow_cats.values())))
         k2.metric("إجمالي المصروفات", format_egp(cash_out), delta_color="inverse")
         k3.metric("صافي الربح", format_egp(net_profit), delta_color="normal" if net_profit>=0 else "inverse")
         
@@ -801,18 +842,18 @@ def show_financial_hq(dfs):
                 x = df_waterfall['Category'].tolist() + ["الصافي"], y = df_waterfall['Amount'].tolist() + [0],
                 connector = {"line":{"color":"rgb(63, 63, 63)"}}, decreasing = {"marker":{"color":"#ef5350"}}, increasing = {"marker":{"color":"#50fa7b"}}, totals = {"marker":{"color":"#42a5f5"}}
             ))
-            fig.update_layout(height=400, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"))
+            fig.update_layout(height=450, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"))
             st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        st.markdown("##### سلة العملات (حسب الطلبات في هذه الفترة)")
+        st.markdown("##### الخزينة النقدية للطلبات (Cash Vault)")
         v1, v2, v3 = st.columns(3)
         v1.metric("الخزينة (EGP)", format_egp(total_egp))
         v2.metric("الخزينة (USD)", format_usd(total_usd))
         v3.metric("الخزينة (EUR)", format_eur(total_eur))
         
         st.divider()
-        st.markdown("##### دفتر الودائع والتأمين")
+        st.markdown("##### دفتر الودائع والتأمين (الطلبات)")
         d1, d2, d3 = st.columns(3)
         d1.metric("تأمين تم تحصيله", format_egp(deposits_collected)) 
         d2.metric("تأمين تم رده", format_egp(deposits_refunded))
