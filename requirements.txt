@@ -7,3 +7,4 @@ crewai
 langchain_openai
 openpyxl
 langchain-google-genai
+pytz
